@@ -41,8 +41,16 @@ venv.bak/
 output/*
 !output/.gitkeep
 
-# PDF files (benchmark samples & generated outputs at root or subdirectories)
+# PDF & Office document artifacts (generated outputs at root or subdirectories)
 *.pdf
+*.docx
+
+# Temporary development & scratch scripts
+patch_*.py
+test_*.py
+test_*.*
+test_output/
+update_prompts.py
 
 # Headless browser print-to-pdf profiles & logs
 .edge_profile/

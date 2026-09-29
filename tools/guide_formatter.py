@@ -66,7 +66,7 @@ def parse_markdown_tables(text: str) -> str:
 
 
 def parse_markdown_blockquotes(text: str) -> str:
-    """Helper to parse multi-line blockquotes into styled HTML callouts."""
+    """Helper to parse multi-line blockquotes into styled HTML callouts matching exemplar PDF standards."""
     lines = text.split('\n')
     in_bq = False
     bq_lines = []
@@ -75,16 +75,37 @@ def parse_markdown_blockquotes(text: str) -> str:
     def render_bq(lines):
         if not lines:
             return ""
-        bq_text = '<br>\n'.join(lines)
-        is_warning = '⚠️' in bq_text or 'MISTAKE' in bq_text.upper() or 'WARNING' in bq_text.upper()
-        is_three_things = 'TIME FOR 3 THINGS' in bq_text.upper() or '3 THINGS' in bq_text.upper()
-        
-        if is_three_things:
-            return f'<div class="three-things-box">\n{bq_text}\n</div>'
-        elif is_warning:
-            return f'<blockquote class="warning-callout">\n{bq_text}\n</blockquote>'
+        header_text = ""
+        body_parts = []
+        for l in lines:
+            l_s = l.strip()
+            if l_s.startswith("### "):
+                header_text = l_s[4:].strip()
+            elif l_s.startswith("## "):
+                header_text = l_s[3:].strip()
+            elif l_s.startswith("**") and l_s.endswith("**") and len(l_s) > 4:
+                header_text = l_s.strip("*").strip()
+            else:
+                body_parts.append(l)
+                
+        h_upper = header_text.upper()
+        box_class = "callout-box"
+        if "MYTH" in h_upper or "BUSTED" in h_upper:
+            box_class += " callout-myths"
+        elif "DOS & DON'TS" in h_upper or "DOS AND DON'TS" in h_upper or "DO'S & DON'TS" in h_upper:
+            box_class += " callout-dos-donts"
+        elif "FIRST-TIMER" in h_upper or "RECOMMENDATION" in h_upper:
+            box_class += " callout-first-timer"
+        elif "CHECKLIST" in h_upper or "ESSENTIALS" in h_upper:
+            box_class += " callout-checklist"
+        elif "ACCESSIBILITY" in h_upper:
+            box_class += " callout-accessibility"
+
+        body_html = "<br>\n".join(body_parts) if body_parts else "<br>\n".join(lines)
+        if header_text:
+            return f'<div class="{box_class}"><div class="callout-header">{header_text.upper()}</div><div class="callout-body">{body_html}</div></div>'
         else:
-            return f'<blockquote class="highlight-quote">\n{bq_text}\n</blockquote>'
+            return f'<div class="{box_class}"><div class="callout-body">{body_html}</div></div>'
 
     for line in lines:
         stripped = line.strip()
@@ -119,15 +140,51 @@ def format_kdp_docx(title: str, subtitle: str, content: str, author: str = "AI W
         from docx.oxml import parse_xml
         from docx.oxml.ns import nsdecls
 
+        # Enforce Section terminology across manuscript
+        content = re.sub(r'\bPart\s+(\d+|[IVX]+)\b', r'Section \1', content, flags=re.IGNORECASE)
+        content = re.sub(r'\bPART\s+(\d+|[IVX]+)\b', r'SECTION \1', content)
+
         doc = docx.Document()
+
+        # Set default styles for Word & Google Docs
+        styles = doc.styles
+        normal_style = styles['Normal']
+        normal_style.font.name = "Arial"
+        normal_style.font.size = Pt(11.5)
+        normal_style.font.color.rgb = RGBColor(0, 0, 0)
+        normal_style.paragraph_format.line_spacing = 1.15
+        normal_style.paragraph_format.space_before = Pt(4)
+        normal_style.paragraph_format.space_after = Pt(0)
+        normal_style.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+
+        if 'Heading 1' in styles:
+            h1_style = styles['Heading 1']
+            h1_style.font.name = "Arial"
+            h1_style.font.size = Pt(48)
+            h1_style.font.bold = True
+            h1_style.font.color.rgb = RGBColor(27, 58, 107)  # #1B3A6B
+            h1_style.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            h1_style.paragraph_format.space_before = Pt(28)
+            h1_style.paragraph_format.space_after = Pt(6)
+
+        if 'Heading 2' in styles:
+            h2_style = styles['Heading 2']
+            h2_style.font.name = "Arial"
+            h2_style.font.size = Pt(18)
+            h2_style.font.bold = True
+            h2_style.font.color.rgb = RGBColor(224, 27, 132)  # #E01B84
+            h2_style.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            h2_style.paragraph_format.space_before = Pt(18)
+            h2_style.paragraph_format.space_after = Pt(6)
+
         section = doc.sections[0]
-        # KDP 7" x 10" Trim Size
+        # Executive 7" x 10" Trim Size with Template Margins (Top: 0.5", Bottom: 1.0", Left: 0.5", Right: 0.5")
         section.page_width = Inches(7.0)
         section.page_height = Inches(10.0)
-        section.left_margin = Inches(0.6)
-        section.right_margin = Inches(0.6)
-        section.top_margin = Inches(0.6)
-        section.bottom_margin = Inches(0.6)
+        section.top_margin = Inches(0.5)
+        section.bottom_margin = Inches(1.0)
+        section.left_margin = Inches(0.5)
+        section.right_margin = Inches(0.5)
 
         clean_title = re.sub(r'[^\w\s-]', '', title).strip()
         clean_title = re.sub(r'[\s-]+', '_', clean_title)
@@ -145,37 +202,66 @@ def format_kdp_docx(title: str, subtitle: str, content: str, author: str = "AI W
                 cp.alignment = WD_ALIGN_PARAGRAPH.CENTER
                 run = cp.add_run()
                 try:
-                    run.add_picture(c_path, width=Inches(5.5))
+                    run.add_picture(c_path, width=Inches(5.8))
                     doc.add_page_break()
                 except Exception:
                     pass
                 break
 
-        # 2. Title Page
+        # Helper to parse inline markdown runs
+        def add_markdown_runs(paragraph, text, base_font="Arial", base_size=Pt(11.5), base_color=RGBColor(0, 0, 0), bold_override=False, italic_override=False):
+            tokens = re.split(r'(\*\*\*.*?\*\*\*|\*\*.*?\*\*|\*.*?\*)', text)
+            for token in tokens:
+                if not token:
+                    continue
+                run = paragraph.add_run()
+                run.font.name = base_font
+                run.font.size = base_size
+                run.font.color.rgb = base_color
+                
+                if token.startswith('***') and token.endswith('***') and len(token) >= 6:
+                    run.text = token[3:-3]
+                    run.bold = True
+                    run.italic = True
+                elif token.startswith('**') and token.endswith('**') and len(token) >= 4:
+                    run.text = token[2:-2]
+                    run.bold = True
+                elif token.startswith('*') and token.endswith('*') and len(token) >= 2:
+                    run.text = token[1:-1]
+                    run.italic = True
+                else:
+                    run.text = token
+                    if bold_override:
+                        run.bold = True
+                    if italic_override:
+                        run.italic = True
+
+        # 2. Title Page (Arial Typography System)
         tp = doc.add_paragraph()
         tp.alignment = WD_ALIGN_PARAGRAPH.CENTER
         tp.paragraph_format.space_before = Pt(40)
-        tp.paragraph_format.space_after = Pt(12)
-        t_run = tp.add_run(title)
-        t_run.font.name = "Georgia"
-        t_run.font.size = Pt(26)
+        tp.paragraph_format.space_after = Pt(14)
+        t_run = tp.add_run(title.title())
+        t_run.font.name = "Arial"
+        t_run.font.size = Pt(36)
         t_run.font.bold = True
-        t_run.font.color.rgb = RGBColor(4, 146, 148)  # Teal accent
+        t_run.font.color.rgb = RGBColor(27, 58, 107)  # #1B3A6B
 
         sp = doc.add_paragraph()
         sp.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        sp.paragraph_format.space_after = Pt(24)
+        sp.paragraph_format.space_after = Pt(28)
         s_run = sp.add_run(subtitle.upper())
-        s_run.font.name = "Georgia"
-        s_run.font.size = Pt(13)
-        s_run.font.color.rgb = RGBColor(204, 153, 68)  # Gold accent
+        s_run.font.name = "Arial"
+        s_run.font.size = Pt(24)
+        s_run.font.bold = True
+        s_run.font.color.rgb = RGBColor(204, 153, 68)  # #CC9944
 
         ap = doc.add_paragraph()
         ap.alignment = WD_ALIGN_PARAGRAPH.CENTER
         a_run = ap.add_run(f"By {author}")
-        a_run.font.name = "Calibri"
-        a_run.font.size = Pt(11)
-        a_run.font.color.rgb = RGBColor(100, 100, 100)
+        a_run.font.name = "Arial"
+        a_run.font.size = Pt(12)
+        a_run.font.color.rgb = RGBColor(85, 85, 85)
 
         doc.add_page_break()
 
@@ -184,7 +270,7 @@ def format_kdp_docx(title: str, subtitle: str, content: str, author: str = "AI W
         c_head.paragraph_format.space_before = Pt(30)
         c_head.paragraph_format.space_after = Pt(6)
         c_run = c_head.add_run(f"Copyright © 2026 by {author}")
-        c_run.font.name = "Georgia"
+        c_run.font.name = "Arial"
         c_run.font.size = Pt(14)
         c_run.font.bold = True
         c_run.font.color.rgb = RGBColor(27, 58, 107)
@@ -196,15 +282,16 @@ def format_kdp_docx(title: str, subtitle: str, content: str, author: str = "AI W
             "First Edition: 2026\n"
             "Format: Amazon KDP Direct (Print & Digital)"
         )
-        c_body_run.font.size = Pt(9.5)
-        c_body_run.font.color.rgb = RGBColor(80, 80, 80)
+        c_body_run.font.name = "Arial"
+        c_body_run.font.size = Pt(10)
+        c_body_run.font.color.rgb = RGBColor(60, 60, 60)
 
         d_head = doc.add_paragraph()
         d_head.paragraph_format.space_before = Pt(16)
         d_head.paragraph_format.space_after = Pt(6)
         d_run = d_head.add_run("Disclaimer & Legal Notice")
-        d_run.font.name = "Georgia"
-        d_run.font.size = Pt(12)
+        d_run.font.name = "Arial"
+        d_run.font.size = Pt(14)
         d_run.font.bold = True
         d_run.font.color.rgb = RGBColor(27, 58, 107)
 
@@ -214,8 +301,9 @@ def format_kdp_docx(title: str, subtitle: str, content: str, author: str = "AI W
             "Readers assume full responsibility for their own safety, route choices, transit ticketing, "
             "and health precautions. Prices, operating hours, and local regulations are subject to change."
         )
-        d_body_run.font.size = Pt(9.5)
-        d_body_run.font.color.rgb = RGBColor(80, 80, 80)
+        d_body_run.font.name = "Arial"
+        d_body_run.font.size = Pt(10)
+        d_body_run.font.color.rgb = RGBColor(60, 60, 60)
 
         doc.add_page_break()
 
@@ -224,21 +312,38 @@ def format_kdp_docx(title: str, subtitle: str, content: str, author: str = "AI W
         toc_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
         toc_p.paragraph_format.space_after = Pt(18)
         toc_run = toc_p.add_run("TABLE OF CONTENTS")
-        toc_run.font.name = "Georgia"
+        toc_run.font.name = "Arial"
         toc_run.font.size = Pt(18)
         toc_run.font.bold = True
-        toc_run.font.color.rgb = RGBColor(4, 146, 148)
+        toc_run.font.color.rgb = RGBColor(27, 58, 107)
 
         raw_chapters = re.split(r'(^##\s+.*$)', content, flags=re.MULTILINE)
+        page_tracker = 5
         for i in range(1, len(raw_chapters), 2):
             ch_line = raw_chapters[i].replace("##", "").strip()
             item_p = doc.add_paragraph()
-            item_p.paragraph_format.space_after = Pt(4)
-            item_run = item_p.add_run(f"•  {ch_line}")
-            item_run.font.name = "Georgia"
-            item_run.font.size = Pt(10.5)
-            item_run.font.bold = True
-            item_run.font.color.rgb = RGBColor(27, 58, 107)
+            item_p.paragraph_format.space_before = Pt(3)
+            item_p.paragraph_format.space_after = Pt(3)
+            
+            dots = " " + ("." * max(8, 46 - len(ch_line))) + " "
+            
+            ch_run = item_p.add_run(ch_line.upper())
+            ch_run.font.name = "Arial"
+            ch_run.font.size = Pt(11)
+            ch_run.font.bold = True
+            ch_run.font.color.rgb = RGBColor(0, 0, 0)
+            
+            d_run = item_p.add_run(dots)
+            d_run.font.name = "Arial"
+            d_run.font.size = Pt(10)
+            d_run.font.color.rgb = RGBColor(140, 140, 140)
+            
+            p_run = item_p.add_run(str(page_tracker))
+            p_run.font.name = "Arial"
+            p_run.font.size = Pt(11)
+            p_run.font.bold = True
+            p_run.font.color.rgb = RGBColor(0, 0, 0)
+            page_tracker += 10
 
         doc.add_page_break()
 
@@ -275,15 +380,20 @@ def format_kdp_docx(title: str, subtitle: str, content: str, author: str = "AI W
                         p.paragraph_format.space_after = Pt(2)
                         p.paragraph_format.space_before = Pt(2)
                         if is_header:
+                            p.runs[0].font.name = "Arial"
                             p.runs[0].font.bold = True
-                            p.runs[0].font.size = Pt(9.5)
-                            p.runs[0].font.color.rgb = RGBColor(27, 58, 107)
-                            shd = parse_xml(f'<w:shd {nsdecls("w")} w:fill="F0F4F8"/>')
+                            p.runs[0].font.size = Pt(10)
+                            p.runs[0].font.color.rgb = RGBColor(255, 255, 255)
+                            shd = parse_xml(f'<w:shd {nsdecls("w")} w:fill="1B3A6B"/>')
                             cell._tc.get_or_add_tcPr().append(shd)
                         else:
+                            if r_idx % 2 == 1:
+                                shd = parse_xml(f'<w:shd {nsdecls("w")} w:fill="EBF3FB"/>')
+                                cell._tc.get_or_add_tcPr().append(shd)
                             if p.runs:
-                                p.runs[0].font.size = Pt(9)
-                                p.runs[0].font.color.rgb = RGBColor(50, 50, 50)
+                                p.runs[0].font.name = "Arial"
+                                p.runs[0].font.size = Pt(9.5)
+                                p.runs[0].font.color.rgb = RGBColor(30, 30, 30)
             table_lines = []
             in_table = False
 
@@ -291,19 +401,84 @@ def format_kdp_docx(title: str, subtitle: str, content: str, author: str = "AI W
             nonlocal bq_lines, in_blockquote
             if not bq_lines:
                 return
-            bq_text = " ".join(bq_lines)
-            bp = doc.add_paragraph()
-            bp.paragraph_format.left_indent = Inches(0.4)
-            bp.paragraph_format.right_indent = Inches(0.4)
-            bp.paragraph_format.space_before = Pt(6)
-            bp.paragraph_format.space_after = Pt(8)
-            b_run = bp.add_run(bq_text)
-            b_run.font.italic = True
-            b_run.font.size = Pt(9.5)
-            b_run.font.color.rgb = RGBColor(45, 55, 72)
+            full_bq = "\n".join(bq_lines)
+            
+            # Identify box category from header
+            h_text = ""
+            for l in bq_lines:
+                ls = l.strip()
+                if ls.startswith("### ") or ls.startswith("## ") or (ls.startswith("**") and ls.endswith("**")):
+                    h_text = ls.strip("#* ").upper()
+                    break
+
+            border_hex = "1B3A6B" # Midnight Navy default
+            header_rgb = RGBColor(27, 58, 107)
+            bg_hex = "F8FAFC"
+
+            if "MYTH" in h_text or "BUSTED" in h_text:
+                border_hex = "C04A26" # Rust Orange
+                header_rgb = RGBColor(192, 74, 38)
+                bg_hex = "FFFFFF"
+            elif "DOS & DON'TS" in h_text or "DOS AND DON'TS" in h_text or "DO'S & DON'TS" in h_text:
+                border_hex = "4B6B94" # Slate Blue
+                header_rgb = RGBColor(27, 58, 107)
+                bg_hex = "F8FAFC"
+            elif "FIRST-TIMER" in h_text or "RECOMMENDATION" in h_text:
+                border_hex = "2D7D46" # Forest Green
+                header_rgb = RGBColor(45, 125, 70)
+                bg_hex = "FFFFFF"
+            elif "CHECKLIST" in h_text or "ESSENTIALS" in h_text:
+                border_hex = "4A2E80" # Deep Purple
+                header_rgb = RGBColor(74, 46, 128)
+                bg_hex = "FFFFFF"
+            elif "ACCESSIBILITY" in h_text:
+                border_hex = "A1346C" # Berry Magenta
+                header_rgb = RGBColor(161, 52, 108)
+                bg_hex = "FFFFFF"
+
+            box_table = doc.add_table(rows=1, cols=1)
+            box_table.alignment = WD_TABLE_ALIGNMENT.CENTER
+            cell = box_table.cell(0, 0)
+            cell.width = Inches(5.8)
+            
+            shd = parse_xml(f'<w:shd {nsdecls("w")} w:fill="{bg_hex}"/>')
+            tcBorders = parse_xml(
+                f'<w:tcBorders {nsdecls("w")}>\n'
+                f'  <w:left w:val="single" w:sz="16" w:space="0" w:color="{border_hex}"/>\n'
+                f'  <w:top w:val="single" w:sz="16" w:space="0" w:color="{border_hex}"/>\n'
+                f'  <w:right w:val="single" w:sz="16" w:space="0" w:color="{border_hex}"/>\n'
+                f'  <w:bottom w:val="single" w:sz="16" w:space="0" w:color="{border_hex}"/>\n'
+                f'</w:tcBorders>'
+            )
+            tcPr = cell._tc.get_or_add_tcPr()
+            tcPr.append(shd)
+            tcPr.append(tcBorders)
+            
+            lines_in_bq = full_bq.split("\n")
+            for idx_bq, bq_l in enumerate(lines_in_bq):
+                bql_strip = bq_l.strip()
+                if not bql_strip:
+                    continue
+                cp = cell.paragraphs[0] if idx_bq == 0 else cell.add_paragraph()
+                cp.paragraph_format.space_before = Pt(2)
+                cp.paragraph_format.space_after = Pt(2)
+                cp.paragraph_format.line_spacing = 1.15
+                
+                if bql_strip.startswith("### ") or bql_strip.startswith("## "):
+                    t_text = bql_strip.lstrip("#").strip().upper()
+                    r = cp.add_run(t_text)
+                    r.font.name = "Arial"
+                    r.font.size = Pt(12)
+                    r.font.bold = True
+                    r.font.color.rgb = header_rgb
+                else:
+                    cp.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+                    add_markdown_runs(cp, bql_strip, base_font="Arial", base_size=Pt(11), base_color=RGBColor(0, 0, 0))
+
             bq_lines = []
             in_blockquote = False
 
+        is_first_chapter = True
         for line in lines:
             stripped = line.strip()
 
@@ -329,43 +504,198 @@ def format_kdp_docx(title: str, subtitle: str, content: str, author: str = "AI W
             if not stripped:
                 continue
 
-            # Heading 1 (Chapter)
-            if stripped.startswith("## "):
-                ch_title = stripped[3:].strip()
-                h1_p = doc.add_paragraph()
-                h1_p.paragraph_format.space_before = Pt(20)
-                h1_p.paragraph_format.space_after = Pt(10)
-                h1_run = h1_p.add_run(ch_title)
-                h1_run.font.name = "Georgia"
-                h1_run.font.size = Pt(18)
-                h1_run.font.bold = True
-                h1_run.font.color.rgb = RGBColor(4, 146, 148)
+            # Skip raw HTML tags and horizontal dividers
+            if stripped.startswith(("<div", "</div", "<br", "<p", "</p", "<!--")) or stripped == "---":
                 continue
 
-            # Heading 2 (Section)
+            # CHAPTER HEADINGS - Heading Style: Heading 1, Font size: 48, ALL CAPITAL LETTERS, Color: #1B3A6B, Bold Text, Center
+            # CHAPTER SUBHEADINGS - Heading Style: Normal text, Font size: 24, ALL CAPITAL LETTERS, Color: #CC9944, Bold Text, Center
+            if stripped.startswith("## "):
+                if not is_first_chapter:
+                    doc.add_page_break()
+                is_first_chapter = False
+                ch_raw = stripped[3:].strip()
+                main_title = ""
+                sub_title = ""
+
+                # Match Chapter X: Subtitle
+                m_ch = re.match(r'^(?:CHAPTER|Chapter)\s+([\dIVX]+)\s*(?:[:—\-]\s*|\s+)(.*)$', ch_raw, re.IGNORECASE)
+                if m_ch:
+                    main_title = f"CHAPTER {m_ch.group(1)}".upper()
+                    sub_title = m_ch.group(2).strip().upper()
+                elif re.match(r'^(?:BEFORE YOU GO|INTRODUCTION)\b', ch_raw, re.IGNORECASE):
+                    main_title = "INTRODUCTION"
+                    sub_title = re.sub(r'^(?:BEFORE YOU GO|INTRODUCTION)\s*[:—\-]\s*', '', ch_raw, flags=re.I).strip().upper()
+                elif re.match(r'^(?:BEFORE YOU FLY HOME|CONCLUSION)\b', ch_raw, re.IGNORECASE):
+                    main_title = "CONCLUSION"
+                    sub_title = re.sub(r'^(?:BEFORE YOU FLY HOME|CONCLUSION)\s*[:—\-]\s*', '', ch_raw, flags=re.I).strip().upper()
+                elif " — " in ch_raw:
+                    parts = ch_raw.split(" — ", 1)
+                    main_title = parts[0].strip().upper()
+                    sub_title = parts[1].strip().upper()
+                elif " - " in ch_raw:
+                    parts = ch_raw.split(" - ", 1)
+                    main_title = parts[0].strip().upper()
+                    sub_title = parts[1].strip().upper()
+                elif ":" in ch_raw:
+                    parts = [p.strip() for p in ch_raw.split(":") if p.strip()]
+                    if len(parts) >= 2:
+                        main_title = parts[0].upper()
+                        sub_title = ": ".join(parts[1:]).upper()
+                    else:
+                        main_title = ch_raw.upper()
+                        sub_title = ""
+                else:
+                    main_title = ch_raw.upper()
+                    sub_title = ""
+
+                h1_p = doc.add_paragraph(style='Heading 1')
+                h1_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                h1_p.paragraph_format.space_before = Pt(32)
+                h1_p.paragraph_format.space_after = Pt(4 if sub_title else 16)
+                h1_run = h1_p.add_run(main_title)
+                h1_run.font.name = "Arial"
+                h1_run.font.size = Pt(48)
+                h1_run.font.bold = True
+                h1_run.font.color.rgb = RGBColor(27, 58, 107)  # #1B3A6B
+
+                if sub_title:
+                    sub_p = doc.add_paragraph(style='Normal')
+                    sub_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                    sub_p.paragraph_format.space_before = Pt(4)
+                    sub_p.paragraph_format.space_after = Pt(18)
+                    sub_run = sub_p.add_run(sub_title)
+                    sub_run.font.name = "Arial"
+                    sub_run.font.size = Pt(24)
+                    sub_run.font.bold = True
+                    sub_run.font.color.rgb = RGBColor(204, 153, 68)  # #CC9944
+                continue
+
+            # SECTION HEADINGS - Heading Style: Heading 2, Font size: 18, Uppercase, Color: #E01B84, Bold Text, Center
             if stripped.startswith("### "):
                 sec_title = stripped[4:].strip()
-                h2_p = doc.add_paragraph()
-                h2_p.paragraph_format.space_before = Pt(14)
+                h2_p = doc.add_paragraph(style='Heading 2')
+                h2_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                h2_p.paragraph_format.space_before = Pt(18)
                 h2_p.paragraph_format.space_after = Pt(6)
-                h2_run = h2_p.add_run(sec_title)
-                h2_run.font.name = "Georgia"
-                h2_run.font.size = Pt(13)
+                h2_run = h2_p.add_run(sec_title.upper())
+                h2_run.font.name = "Arial"
+                h2_run.font.size = Pt(18)
                 h2_run.font.bold = True
-                h2_run.font.color.rgb = RGBColor(27, 58, 107)
+                h2_run.font.color.rgb = RGBColor(224, 27, 132)  # #E01B84
                 continue
 
-            # Heading 3 (Subsection)
+            # SECTION SUBHEADINGS - Heading Style: Normal text, Font size: 16, Title Case, Color: #000B50, Bold Text, Left
             if stripped.startswith("#### "):
                 sub_title = stripped[5:].strip()
-                h3_p = doc.add_paragraph()
-                h3_p.paragraph_format.space_before = Pt(10)
+                h3_p = doc.add_paragraph(style='Normal')
+                h3_p.alignment = WD_ALIGN_PARAGRAPH.LEFT
+                h3_p.paragraph_format.space_before = Pt(14)
                 h3_p.paragraph_format.space_after = Pt(4)
-                h3_run = h3_p.add_run(sub_title)
-                h3_run.font.name = "Georgia"
-                h3_run.font.size = Pt(11)
+                h3_run = h3_p.add_run(sub_title.title())
+                h3_run.font.name = "Arial"
+                h3_run.font.size = Pt(16)
                 h3_run.font.bold = True
-                h3_run.font.color.rgb = RGBColor(192, 86, 33)
+                h3_run.font.color.rgb = RGBColor(0, 11, 80)  # #000B50
+                continue
+
+            # Heading 4 (Sub-Subsection)
+            if stripped.startswith("##### "):
+                sub4_title = stripped[6:].strip()
+                h4_p = doc.add_paragraph(style='Normal')
+                h4_p.alignment = WD_ALIGN_PARAGRAPH.LEFT
+                h4_p.paragraph_format.space_before = Pt(10)
+                h4_p.paragraph_format.space_after = Pt(3)
+                h4_run = h4_p.add_run(sub4_title.title())
+                h4_run.font.name = "Arial"
+                h4_run.font.size = Pt(14)
+                h4_run.font.bold = True
+                h4_run.font.color.rgb = RGBColor(0, 11, 80)
+                continue
+
+            # Heading 5 (Minor Subtopic)
+            if stripped.startswith("###### "):
+                sub5_title = stripped[7:].strip()
+                h5_p = doc.add_paragraph(style='Normal')
+                h5_p.alignment = WD_ALIGN_PARAGRAPH.LEFT
+                h5_p.paragraph_format.space_before = Pt(8)
+                h5_p.paragraph_format.space_after = Pt(2)
+                h5_run = h5_p.add_run(sub5_title.title())
+                h5_run.font.name = "Arial"
+                h5_run.font.size = Pt(12)
+                h5_run.font.bold = True
+                h5_run.font.color.rgb = RGBColor(27, 58, 107)
+                continue
+
+            # Check for Figure or Map visual description card (3-4 per chapter)
+            fig_m = re.match(r'^(?:Figure|Map|FIGURE|MAP)\s+([\dIVX\w\.]+)\s*(?:—|:|-)\s*(.*?)(?::|\s*—|\s*-\s*|\s*\|\s*)(.+)$', stripped)
+            if not fig_m:
+                fig_m = re.match(r'^(?:Figure|Map|FIGURE|MAP)\s+([\dIVX\w\.]+)\s*(?:—|:|-)\s*(.+)$', stripped)
+
+            if fig_m:
+                if in_blockquote:
+                    flush_blockquote()
+                if in_table:
+                    flush_table()
+
+                is_map = stripped.lower().startswith("map")
+                fig_label = fig_m.group(1).strip()
+                if len(fig_m.groups()) >= 3 and fig_m.group(3):
+                    fig_title = fig_m.group(2).strip()
+                    fig_desc = fig_m.group(3).strip()
+                else:
+                    fig_title = "Route & Area Map" if is_map else "Documentary Scene"
+                    fig_desc = fig_m.group(2).strip()
+
+                fig_table = doc.add_table(rows=1, cols=1)
+                fig_table.alignment = WD_TABLE_ALIGNMENT.CENTER
+                f_cell = fig_table.cell(0, 0)
+                f_cell.width = Inches(5.8)
+
+                f_shd = parse_xml(f'<w:shd {nsdecls("w")} w:fill="F8FAFC"/>')
+                f_borders = parse_xml(
+                    f'<w:tcBorders {nsdecls("w")}>\n'
+                    f'  <w:left w:val="single" w:sz="24" w:space="0" w:color="1B3A6B"/>\n'
+                    f'  <w:top w:val="single" w:sz="4" w:space="0" w:color="CBD5E0"/>\n'
+                    f'  <w:right w:val="single" w:sz="4" w:space="0" w:color="CBD5E0"/>\n'
+                    f'  <w:bottom w:val="single" w:sz="4" w:space="0" w:color="CBD5E0"/>\n'
+                    f'</w:tcBorders>'
+                )
+                f_tcPr = f_cell._tc.get_or_add_tcPr()
+                f_tcPr.append(f_shd)
+                f_tcPr.append(f_borders)
+
+                prefix = "🗺️ MAP" if is_map else "📷 FIGURE"
+                fp1 = f_cell.paragraphs[0]
+                fp1.alignment = WD_ALIGN_PARAGRAPH.LEFT
+                fp1.paragraph_format.space_before = Pt(4)
+                fp1.paragraph_format.space_after = Pt(2)
+                fr1 = fp1.add_run(f"{prefix} {fig_label.upper()} — {fig_title.upper()}")
+                fr1.font.name = "Arial"
+                fr1.font.size = Pt(10.5)
+                fr1.font.bold = True
+                fr1.font.color.rgb = RGBColor(27, 58, 107)
+
+                fp_badge = f_cell.add_paragraph()
+                fp_badge.alignment = WD_ALIGN_PARAGRAPH.LEFT
+                fp_badge.paragraph_format.space_before = Pt(0)
+                fp_badge.paragraph_format.space_after = Pt(4)
+                fr_badge = fp_badge.add_run("VISUAL ART BRIEF / PHOTO SPECIFICATION")
+                fr_badge.font.name = "Arial"
+                fr_badge.font.size = Pt(8.5)
+                fr_badge.font.bold = True
+                fr_badge.font.color.rgb = RGBColor(204, 153, 68)
+
+                fp2 = f_cell.add_paragraph()
+                fp2.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+                fp2.paragraph_format.space_before = Pt(2)
+                fp2.paragraph_format.space_after = Pt(4)
+                fp2.paragraph_format.line_spacing = 1.15
+                fr2 = fp2.add_run(fig_desc)
+                fr2.font.name = "Arial"
+                fr2.font.size = Pt(9.5)
+                fr2.font.italic = True
+                fr2.font.color.rgb = RGBColor(74, 85, 104)
                 continue
 
             # Image markdown: ![caption](path)
@@ -393,27 +723,50 @@ def format_kdp_docx(title: str, subtitle: str, content: str, author: str = "AI W
                         ip.paragraph_format.space_before = Pt(10)
                         ip.paragraph_format.space_after = Pt(2)
                         run = ip.add_run()
-                        run.add_picture(actual_img, width=Inches(5.2))
+                        run.add_picture(actual_img, width=Inches(5.5))
                     except Exception:
                         pass
 
                 cap_p = doc.add_paragraph()
                 cap_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                cap_p.paragraph_format.space_after = Pt(12)
+                cap_p.paragraph_format.space_after = Pt(10)
                 cap_run = cap_p.add_run(caption)
+                cap_run.font.name = "Arial"
                 cap_run.font.italic = True
-                cap_run.font.size = Pt(8.5)
-                cap_run.font.color.rgb = RGBColor(113, 128, 150)
+                cap_run.font.size = Pt(9)
+                cap_run.font.color.rgb = RGBColor(100, 100, 100)
                 continue
 
-            # Normal Paragraph
-            p = doc.add_paragraph()
-            p.paragraph_format.space_after = Pt(5)
+            # Bullet List
+            if stripped.startswith(("- ", "* ", "• ")):
+                bullet_text = re.sub(r'^[-*•]\s*', '', stripped)
+                bp = doc.add_paragraph(style='List Bullet')
+                bp.alignment = WD_ALIGN_PARAGRAPH.LEFT
+                bp.paragraph_format.line_spacing = 1.15
+                bp.paragraph_format.space_before = Pt(2)
+                bp.paragraph_format.space_after = Pt(0)
+                add_markdown_runs(bp, bullet_text, base_font="Arial", base_size=Pt(11.5), base_color=RGBColor(0, 0, 0))
+                continue
+
+            # BODY TEXT: Heading Style: Normal text, Font size: 11.5, Text: Sentence/Prose, Color: #000000, Line Spacing: 1.15, Add space before paragraph, Remove space after paragraph, Text Alignment: Justify
+            p = doc.add_paragraph(style='Normal')
+            p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
             p.paragraph_format.line_spacing = 1.15
-            run = p.add_run(stripped)
-            run.font.name = "Calibri"
-            run.font.size = Pt(10)
-            run.font.color.rgb = RGBColor(40, 40, 40)
+            p.paragraph_format.space_before = Pt(4)
+            p.paragraph_format.space_after = Pt(0)
+            add_markdown_runs(p, stripped, base_font="Arial", base_size=Pt(11.5), base_color=RGBColor(0, 0, 0))
+
+        if in_table:
+            flush_table()
+        if in_blockquote:
+            flush_blockquote()
+
+        docx_filepath = os.path.join(output_dir, f"{clean_title}.docx")
+        doc.save(docx_filepath)
+        return docx_filepath
+    except Exception as e:
+        print(f"[DocxFormatter Error] Failed to generate docx: {e}")
+        return None
 
         if in_table:
             flush_table()
@@ -429,6 +782,9 @@ def format_kdp_docx(title: str, subtitle: str, content: str, author: str = "AI W
 
 
 def format_kdp_guide(title: str, subtitle: str, content: str, author: str = "AI Writer", output_dir: str = "output") -> str:
+    # Enforce Section terminology across manuscript
+    content = re.sub(r'\bPart\s+(\d+|[IVX]+)\b', r'Section \1', content, flags=re.IGNORECASE)
+    content = re.sub(r'\bPART\s+(\d+|[IVX]+)\b', r'SECTION \1', content)
     """
     Format raw manuscript text into an Amazon KDP-compatible guide.
     This includes adding a Title Page, Copyright Page, Disclaimer Page, Table of Contents,
@@ -510,20 +866,10 @@ Format: Amazon KDP Direct
         
         toc += "\n---\n"
 
-        # 4. Process Content: Ensure page breaks
-        processed_content = content
-        sections = re.split(r"^(##\s+.+)$", processed_content, flags=re.MULTILINE)
-        compiled_sections = []
-        if sections:
-            compiled_sections.append(sections[0])
-            
-        for i in range(1, len(sections), 2):
-            header = sections[i]
-            body = sections[i+1] if i+1 < len(sections) else ""
-            page_break = '\n<div style="page-break-after: always;"></div>\n\n'
-            compiled_sections.append(f"{page_break}{header}{body}")
-            
-        final_content = "".join(compiled_sections)
+        # 4. Process Content: Clean markdown without duplicate page-break wrappers
+        # (h1.chapter-title has page-break-before: always in CSS; no extra divs needed)
+        cleaned_content = re.sub(r'<div style="page-break-[^>]+></div>', '', content)
+        final_content = cleaned_content.strip()
 
         # Assemble the full book
         manuscript = f"{title_page}\n{copyright_page}\n{disclaimer_page}\n{toc}\n{final_content}"
@@ -614,13 +960,76 @@ Format: Amazon KDP Direct
     <p class="image-caption" style="font-size: 9.5pt; color: #718096; font-style: italic; margin-top: 6px;">{caption}</p>
 </div>
 """
+            def replace_figure_line(match):
+                prefix_type = "MAP" if match.group(0).lower().startswith("map") else "FIGURE"
+                icon = "🗺️" if prefix_type == "MAP" else "📷"
+                fig_num = match.group(1).strip()
+                fig_title = match.group(2).strip()
+                fig_desc = match.group(3).strip() if match.group(3) else fig_title
+                return f'''
+<div class="figure-card">
+    <div class="figure-card-header">
+        <span class="camera-icon">{icon}</span>
+        <span class="figure-title">{prefix_type} {fig_num.upper()} — {fig_title.upper()}</span>
+    </div>
+    <div class="figure-card-badge">VISUAL ART BRIEF / PHOTO SPECIFICATION</div>
+    <p class="figure-card-desc">{fig_desc}</p>
+</div>
+'''
+
+            body_html = re.sub(
+                r'^(?:Figure|Map|FIGURE|MAP)\s+([\dIVX\w\.]+)\s*(?:—|:|-)\s*(.*?)(?::|\s*—|\s*-\s*|\s*\|\s*)(.+)$',
+                replace_figure_line,
+                body_html,
+                flags=re.MULTILINE
+            )
             body_html = re.sub(r'!\[(.*?)\]\((.*?)\)', replace_markdown_image, body_html)
 
-            body_html = re.sub(r"^##\s+(.+)$", r'<h1 class="chapter-title">\1</h1>', body_html, flags=re.MULTILINE)
-            body_html = re.sub(r"^###\s+(.+)$", r'<h2 class="section-title">\1</h2>', body_html, flags=re.MULTILINE)
-            body_html = re.sub(r"^####\s+(.+)$", r'<h3 class="subsection-title">\1</h3>', body_html, flags=re.MULTILINE)
-            body_html = re.sub(r"^#####\s+(.+)$", r'<h4 class="sub-subsection-title">\1</h4>', body_html, flags=re.MULTILINE)
-            body_html = re.sub(r"^######\s+(.+)$", r'<h5 class="minor-subtopic">\1</h5>', body_html, flags=re.MULTILINE)
+            def replace_chapter_header(match):
+                ch_raw = match.group(1).strip()
+                main_title = ""
+                sub_title = ""
+
+                m_ch = re.match(r'^(?:CHAPTER|Chapter)\s+([\dIVX]+)\s*(?:[:—\-]\s*|\s+)(.*)$', ch_raw, re.IGNORECASE)
+                if m_ch:
+                    main_title = f"CHAPTER {m_ch.group(1)}".upper()
+                    sub_title = m_ch.group(2).strip().upper()
+                elif re.match(r'^(?:BEFORE YOU GO|INTRODUCTION)\b', ch_raw, re.IGNORECASE):
+                    main_title = "INTRODUCTION"
+                    sub_title = re.sub(r'^(?:BEFORE YOU GO|INTRODUCTION)\s*[:—\-]\s*', '', ch_raw, flags=re.I).strip().upper()
+                elif re.match(r'^(?:BEFORE YOU FLY HOME|CONCLUSION)\b', ch_raw, re.IGNORECASE):
+                    main_title = "CONCLUSION"
+                    sub_title = re.sub(r'^(?:BEFORE YOU FLY HOME|CONCLUSION)\s*[:—\-]\s*', '', ch_raw, flags=re.I).strip().upper()
+                elif " — " in ch_raw:
+                    parts = ch_raw.split(" — ", 1)
+                    main_title = parts[0].strip().upper()
+                    sub_title = parts[1].strip().upper()
+                elif " - " in ch_raw:
+                    parts = ch_raw.split(" - ", 1)
+                    main_title = parts[0].strip().upper()
+                    sub_title = parts[1].strip().upper()
+                elif ":" in ch_raw:
+                    parts = [p.strip() for p in ch_raw.split(":") if p.strip()]
+                    if len(parts) >= 2:
+                        main_title = parts[0].upper()
+                        sub_title = ": ".join(parts[1:]).upper()
+                    else:
+                        main_title = ch_raw.upper()
+                        sub_title = ""
+                else:
+                    main_title = ch_raw.upper()
+                    sub_title = ""
+                
+                out = f'<h1 class="chapter-title">{main_title}</h1>'
+                if sub_title:
+                    out += f'\n<div class="chapter-subheading">{sub_title}</div>'
+                return out
+
+            body_html = re.sub(r"^##\s+(.+)$", replace_chapter_header, body_html, flags=re.MULTILINE)
+            body_html = re.sub(r"^###\s+(.+)$", lambda m: f'<h2 class="section-title">{m.group(1).strip().upper()}</h2>', body_html, flags=re.MULTILINE)
+            body_html = re.sub(r"^####\s+(.+)$", lambda m: f'<h3 class="subsection-title">{m.group(1).strip().title()}</h3>', body_html, flags=re.MULTILINE)
+            body_html = re.sub(r"^#####\s+(.+)$", lambda m: f'<h4 class="sub-subsection-title">{m.group(1).strip().title()}</h4>', body_html, flags=re.MULTILINE)
+            body_html = re.sub(r"^######\s+(.+)$", lambda m: f'<h5 class="minor-subtopic">{m.group(1).strip().title()}</h5>', body_html, flags=re.MULTILINE)
             body_html = re.sub(r"\*\*(.+?)\*\*", r'<strong>\1</strong>', body_html)
             body_html = re.sub(r"\*(.+?)\*", r'<em>\1</em>', body_html)
 
@@ -645,11 +1054,6 @@ Format: Amazon KDP Direct
             for ch in chapter_tree:
                 ch_p = toc_pages.get(ch["title"], "") if toc_pages else ""
                 toc_items.append(f'<li class="toc-chapter"><span class="toc-title">{ch["title"]}</span><span class="toc-dots"></span><span class="toc-page">{ch_p}</span></li>')
-                for sub in ch["subsections"]:
-                    sub_p = toc_pages.get(sub, "") if toc_pages else ""
-                    # Only show subsections in printed TOC when resolved or in pass 1 preview
-                    if sub_p or not toc_pages:
-                        toc_items.append(f'<li class="toc-sub"><span class="toc-title">{sub}</span><span class="toc-dots"></span><span class="toc-page">{sub_p}</span></li>')
             toc_html = "\n".join(toc_items)
 
             return f"""<!DOCTYPE html>
@@ -658,18 +1062,16 @@ Format: Amazon KDP Direct
     <meta charset="utf-8">
     <title>{title}: {subtitle}</title>
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Aleo:ital,wght@0,300;0,400;0,700;1,400;1,700&family=Inter:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&display=swap');
-
         @page {{
             size: 7in 10in;
-            margin: 0.75in 0.65in 0.85in 0.65in;
+            margin: 0.5in 0.5in 1.0in 0.5in;
         }}
         body {{
-            font-family: 'Inter', Arial, Helvetica, sans-serif;
-            line-height: 1.48;
+            font-family: Arial, Helvetica, sans-serif;
+            line-height: 1.25;
             margin: 0;
-            font-size: 10pt;
-            color: #1a202c;
+            font-size: 11pt;
+            color: #000000;
             text-align: justify;
             text-justify: inter-word;
         }}
@@ -681,126 +1083,181 @@ Format: Amazon KDP Direct
             page-break-after: always;
         }}
         h1.chapter-title {{
-            font-family: 'Aleo', Georgia, 'Times New Roman', serif;
-            font-size: 21pt;
+            font-family: Arial, sans-serif;
+            font-size: 48pt;
             font-weight: 700;
-            color: #049294; /* Cyan / Deep Teal */
+            color: #1B3A6B;
+            text-align: center;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            margin-top: 0.35in;
+            margin-bottom: 0.08in;
+            page-break-before: always;
+            border-bottom: 2.5px solid #1B3A6B;
+            padding-bottom: 0.08in;
+        }}
+        .chapter-subheading {{
+            font-family: Arial, sans-serif;
+            font-size: 24pt;
+            font-weight: 700;
+            color: #CC9944;
             text-align: center;
             text-transform: uppercase;
-            letter-spacing: 0.8px;
-            margin-top: 0.4in;
-            margin-bottom: 0.25in;
-            page-break-before: always;
-            border-bottom: 2.5px solid #049294;
-            padding-bottom: 0.1in;
+            letter-spacing: 0.5px;
+            margin-top: 0.06in;
+            margin-bottom: 0.28in;
+            page-break-after: avoid;
         }}
         h2.section-title {{
-            font-family: 'Aleo', Georgia, 'Times New Roman', serif;
-            font-size: 14pt;
+            font-family: Arial, sans-serif;
+            font-size: 18pt;
             font-weight: 700;
-            color: #1b3a6b; /* Royal Navy */
-            text-align: left;
+            color: #E01B84; /* #E01B84 */
+            text-align: center;
             text-transform: uppercase;
-            letter-spacing: 0.5px;
-            margin-top: 0.35in;
-            margin-bottom: 0.15in;
+            letter-spacing: 0.3px;
+            margin-top: 0.3in;
+            margin-bottom: 0.12in;
             page-break-after: avoid;
-            border-bottom: 1.5px solid #cc9944; /* Warm Gold / Ochre */
-            padding-bottom: 0.05in;
+            border-bottom: 1.5px solid #E01B84;
+            padding-bottom: 0.04in;
         }}
         h3.subsection-title {{
-            font-family: 'Inter', Arial, sans-serif;
-            font-size: 11pt;
+            font-family: Arial, sans-serif;
+            font-size: 16pt;
             font-weight: 700;
-            color: #b83280; /* Rich Magenta / Berry accent */
+            color: #000B50; /* #000B50 */
             text-align: left;
-            margin-top: 0.25in;
-            margin-bottom: 0.1in;
-            page-break-after: avoid;
-        }}
-        h4.sub-subsection-title {{
-            font-family: 'Inter', Arial, sans-serif;
-            font-size: 10.5pt;
-            font-weight: 600;
-            color: #2d3748;
-            text-align: left;
-            margin-top: 0.2in;
+            margin-top: 0.22in;
             margin-bottom: 0.08in;
             page-break-after: avoid;
         }}
-        h5.minor-subtopic {{
-            font-family: 'Inter', Arial, sans-serif;
-            font-size: 10pt;
-            font-weight: 600;
-            color: #4a5568;
+        h4.sub-subsection-title {{
+            font-family: Arial, sans-serif;
+            font-size: 14pt;
+            font-weight: 700;
+            color: #000B50;
             text-align: left;
-            margin-top: 0.15in;
+            margin-top: 0.16in;
             margin-bottom: 0.06in;
             page-break-after: avoid;
         }}
-        p {{
-            margin-top: 0;
-            margin-bottom: 0.85em;
-        }}
-        blockquote.highlight-quote {{
-            background-color: #f0fdfa;
-            border-left: 4.5px solid #049294;
-            margin: 1.2em 0;
-            padding: 0.8em 1.2em;
-            color: #134e4a;
-            page-break-inside: avoid;
-            border-radius: 0 5px 5px 0;
-        }}
-        blockquote.warning-callout {{
-            background-color: #fffaf0;
-            border-left: 4.5px solid #dd6b20;
-            margin: 1.2em 0;
-            padding: 0.8em 1.2em;
-            color: #744210;
-            page-break-inside: avoid;
-            border-radius: 0 5px 5px 0;
-        }}
-        .three-things-box {{
-            background-color: #f8fafc;
-            border: 1.5px solid #cbd5e0;
-            border-top: 4px solid #1b3a6b;
-            border-radius: 6px;
-            padding: 14px 18px;
-            margin: 1.5em 0;
-            page-break-inside: avoid;
-            color: #1a202c;
-        }}
-        .three-things-box h3 {{
-            margin-top: 0;
-            color: #1b3a6b;
-            font-family: 'Aleo', Georgia, serif;
+        h5.minor-subtopic {{
+            font-family: Arial, sans-serif;
             font-size: 12pt;
+            font-weight: 700;
+            color: #1B3A6B;
+            text-align: left;
+            margin-top: 0.12in;
+            margin-bottom: 0.04in;
+            page-break-after: avoid;
         }}
-        .photo-placeholder-box {{
-            background-color: #f8fafc;
-            border: 1.5px dashed #cbd5e0;
-            padding: 16px;
-            margin: 0.3in 0;
-            text-align: center;
-            border-radius: 6px;
+        p {{
+            margin-top: 4pt;
+            margin-bottom: 0;
+            font-size: 11pt;
+            line-height: 1.25;
+            color: #000000;
+            text-align: justify;
+        }}
+        .figure-card {{
+            background-color: #F8FAFC;
+            border: 1px solid #CBD5E0;
+            border-left: 4px solid #1B3A6B;
+            border-radius: 4px;
+            padding: 12px 16px;
+            margin: 18px 0;
             page-break-inside: avoid;
         }}
-        .photo-placeholder-box .camera-icon {{
-            font-size: 24pt;
-            display: block;
+        .figure-card-header {{
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 4px;
+        }}
+        .figure-card-header .camera-icon {{
+            font-size: 13pt;
+        }}
+        .figure-card-header .figure-title {{
+            font-family: Arial, sans-serif;
+            font-size: 10.5pt;
+            font-weight: bold;
+            color: #1B3A6B;
+            letter-spacing: 0.5px;
+        }}
+        .figure-card-badge {{
+            font-family: Arial, sans-serif;
+            font-size: 8.5pt;
+            font-weight: bold;
+            color: #CC9944;
+            letter-spacing: 0.8px;
+            text-transform: uppercase;
+            margin-bottom: 6px;
+        }}
+        .figure-card-desc {{
+            font-family: Arial, sans-serif;
+            font-size: 9.5pt;
+            color: #4A5568;
+            font-style: italic;
+            line-height: 1.25;
+            margin: 0;
+            text-align: justify;
+        }}
+        .callout-box {{
+            background-color: #F8FAFC;
+            border: 2px solid #1B3A6B;
+            border-radius: 4px;
+            padding: 14px 18px;
+            margin: 18px 0;
+            page-break-inside: avoid;
+        }}
+        .callout-box.callout-myths {{
+            border: 2px solid #C04A26;
+            background-color: #FFFFFF;
+        }}
+        .callout-box.callout-myths .callout-header {{
+            color: #C04A26;
+        }}
+        .callout-box.callout-dos-donts {{
+            border: 2px solid #4B6B94;
+            background-color: #F8FAFC;
+        }}
+        .callout-box.callout-first-timer {{
+            border: 2px solid #2D7D46;
+            background-color: #FFFFFF;
+        }}
+        .callout-box.callout-first-timer .callout-header {{
+            color: #2D7D46;
+        }}
+        .callout-box.callout-checklist {{
+            border: 2px solid #4A2E80;
+            background-color: #FFFFFF;
+        }}
+        .callout-box.callout-checklist .callout-header {{
+            color: #4A2E80;
+        }}
+        .callout-box.callout-accessibility {{
+            border: 2px solid #A1346C;
+            background-color: #FFFFFF;
+        }}
+        .callout-box.callout-accessibility .callout-header {{
+            color: #A1346C;
+        }}
+        .callout-header {{
+            font-family: Arial, sans-serif;
+            font-size: 12.5pt;
+            font-weight: bold;
+            color: #1B3A6B;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
             margin-bottom: 8px;
         }}
-        .photo-placeholder-box strong {{
-            color: #4a5568;
-            font-size: 10.5pt;
-            letter-spacing: 1px;
-            text-transform: uppercase;
-        }}
-        .photo-placeholder-box .placeholder-caption {{
-            font-size: 9.5pt;
-            color: #718096;
-            margin-top: 6px;
-            font-style: italic;
+        .callout-body {{
+            font-family: Arial, sans-serif;
+            font-size: 11pt;
+            color: #000000;
+            line-height: 1.25;
+            text-align: justify;
         }}
         .toc {{
             list-style: none;
@@ -815,7 +1272,7 @@ Format: Amazon KDP Direct
             margin-bottom: 5px;
             font-size: 10.5pt;
             font-weight: bold;
-            font-family: 'Aleo', Georgia, serif;
+            font-family: Arial, sans-serif;
             color: #1b3a6b;
         }}
         .toc-chapter .toc-title {{
@@ -864,7 +1321,7 @@ Format: Amazon KDP Direct
             font-family: 'Inter', Arial, sans-serif;
         }}
         tr:nth-child(even) {{
-            background-color: #f8fafc;
+            background-color: #ebf3fb;
         }}
     </style>
 </head>
@@ -872,22 +1329,22 @@ Format: Amazon KDP Direct
     {cover_html}
     
     <div class="page-break title-page" style="text-align: center; padding-top: 1.2in;">
-        <h1 style="font-family: 'Aleo', Georgia, serif; font-size: 26pt; color: #049294; margin-bottom: 0.2in; border: none;">{title}</h1>
-        <p style="font-family: 'Aleo', Georgia, serif; font-size: 15pt; color: #cc9944; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 0.6in;">{subtitle}</p>
-        <p style="font-size: 12pt; color: #4a5568;">By <strong>{author}</strong></p>
+        <h1 style="font-family: Arial, sans-serif; font-size: 36pt; font-weight: bold; color: #1B3A6B; margin-bottom: 0.2in; border: none; text-transform: uppercase;">{title}</h1>
+        <p style="font-family: Arial, sans-serif; font-size: 24pt; font-weight: bold; color: #CC9944; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 0.6in;">{subtitle}</p>
+        <p style="font-family: Arial, sans-serif; font-size: 12pt; color: #555555;">By <strong>{author}</strong></p>
     </div>
 
-    <div class="page-break copyright" style="padding-top: 1in; font-size: 9.5pt; color: #4a5568;">
-        <h3 style="font-family: 'Aleo', Georgia, serif; color: #1b3a6b;">Copyright © 2026 by {author}</h3>
-        <p>All rights reserved. No part of this publication may be reproduced, distributed, or transmitted in any form or by any means without the prior written permission of the publisher.</p>
-        <p>Published by Author Direct | 2026 Edition</p>
-        <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 20px 0;">
-        <h4 style="font-family: 'Aleo', Georgia, serif; color: #1b3a6b;">Disclaimer & Legal Notice</h4>
-        <p>This field guide is for informational purposes only. Readers assume full responsibility for route selection, gear, weather precautions, and travel safety.</p>
+    <div class="page-break copyright" style="padding-top: 1in; font-size: 10pt; color: #3C3C3C;">
+        <h3 style="font-family: Arial, sans-serif; font-size: 14pt; color: #1B3A6B; font-weight: bold;">Copyright © 2026 by {author}. All rights reserved.</h3>
+        <p>No part of this publication may be reproduced, stored in a retrieval system, or transmitted in any form or by any means without the prior written permission of the author.</p>
+        <p>First Edition: 2026 | Format: Amazon KDP Direct — Executive 7" × 10" trim size.</p>
+        <hr style="border: none; border-top: 1px solid #CBD5E0; margin: 20px 0;">
+        <h4 style="font-family: Arial, sans-serif; font-size: 14pt; color: #1B3A6B; font-weight: bold;">DISCLAIMER & ACCURACY NOTICE</h4>
+        <p>This guide is intended for general informational and travel-planning purposes only. Readers assume full responsibility for their own safety, route choices, transit ticketing, and health precautions.</p>
     </div>
 
-    <div class="page-break">
-        <h2 style="font-family: 'Aleo', Georgia, serif; color: #049294; text-align: center; border: none; font-size: 20pt; margin-bottom: 25px; text-transform: uppercase; letter-spacing: 1px;">TABLE OF CONTENTS</h2>
+    <div class="toc-container">
+        <h2 style="font-family: Arial, sans-serif; color: #1B3A6B; text-align: center; border: none; font-size: 18pt; font-weight: bold; margin-bottom: 25px; text-transform: uppercase; letter-spacing: 1px;">TABLE OF CONTENTS</h2>
         <ul class="toc">
             {toc_html}
         </ul>
@@ -960,13 +1417,18 @@ Format: Amazon KDP Direct
                     return 0
 
                 # Pass 1: Render layout to discover page targets
-                with tempfile.TemporaryDirectory() as temp_dir_1:
+                try:
+                    td1 = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+                except TypeError:
+                    td1 = tempfile.TemporaryDirectory()
+                with td1 as temp_dir_1:
                     cmd1 = base_flags + [f"--user-data-dir={temp_dir_1}", f"--print-to-pdf={pdf_abs}", html_abs]
                     run_edge_print(cmd1, pdf_abs, timeout=60)
 
                 # Discover page numbers with PyMuPDF
                 doc = pymupdf.open(pdf_abs)
                 heading_pages = {"Copyright Notice": 3, "Disclaimer & Legal Notice": 3}
+                current_ch = None
                 for pno in range(3, len(doc)):
                     page = doc[pno]
                     blocks = page.get_text("dict")["blocks"]
@@ -976,19 +1438,23 @@ Format: Amazon KDP Direct
                             b_clean = re.sub(r'\W+', '', block_text).upper()
                             first_span = b["lines"][0]["spans"][0]
                             font_size = first_span["size"]
-                            # Check Level 1 (Chapters)
-                            if font_size >= 12.5:
+                            # Check Level 1 (Chapters: 48pt)
+                            if font_size >= 32.0:
                                 for ch in chapter_tree:
-                                    ch_clean = re.sub(r'\W+', '', ch["title"]).upper()
-                                    if ch_clean[:18] in b_clean and ch["title"] not in heading_pages:
+                                    ch_t = ch["title"].upper()
+                                    ch_clean = re.sub(r'\W+', '', ch_t)
+                                    prefix_m = re.match(r'^(CHAPTER\s+\d+|INTRODUCTION|CONCLUSION)', ch_t)
+                                    prefix_clean = re.sub(r'\W+', '', prefix_m.group(1)) if prefix_m else ch_clean[:10]
+                                    if prefix_clean == b_clean and ch["title"] not in heading_pages:
                                         heading_pages[ch["title"]] = pno + 1
-                            # Check Level 2 (Subsections)
-                            elif 8.8 <= font_size < 12.5:
-                                for ch in chapter_tree:
-                                    for sub in ch["subsections"]:
-                                        sub_clean = re.sub(r'\W+', '', sub).upper()
-                                        if sub_clean[:18] in b_clean and sub not in heading_pages:
-                                            heading_pages[sub] = pno + 1
+                                        current_ch = ch
+                            # Check Level 2 (Subsections: 18pt / 16pt)
+                            elif 14.0 <= font_size < 20.0 and current_ch:
+                                for sub in current_ch["subsections"]:
+                                    sub_clean = re.sub(r'\W+', '', sub).upper()
+                                    sub_key = f"{current_ch['title']}::{sub}"
+                                    if sub_clean[:18] in b_clean and sub_key not in heading_pages:
+                                        heading_pages[sub_key] = pno + 1
                 doc.close()
 
                 # Pass 2: Re-generate HTML with exact page numbers in TOC
@@ -997,7 +1463,11 @@ Format: Amazon KDP Direct
                     f.write(pass2_html)
 
                 # Re-render final PDF
-                with tempfile.TemporaryDirectory() as temp_dir_2:
+                try:
+                    td2 = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+                except TypeError:
+                    td2 = tempfile.TemporaryDirectory()
+                with td2 as temp_dir_2:
                     cmd2 = base_flags + [f"--user-data-dir={temp_dir_2}", f"--print-to-pdf={pdf_abs}", html_abs]
                     run_edge_print(cmd2, pdf_abs, timeout=60)
 
@@ -1014,16 +1484,17 @@ Format: Amazon KDP Direct
 
                 # Build hierarchical bookmarks (Level 1 Chapters, Level 2 Subsections)
                 toc_tree = [
-                    [1, "Front Matter: Copyright & Disclaimer", 3],
-                    [1, "Table of Contents", 4]
+                    [1, "Front Matter: Copyright & Disclaimer", 2],
+                    [1, "Table of Contents", 3]
                 ]
                 for ch in chapter_tree:
                     ch_title = ch["title"]
                     if ch_title in heading_pages:
                         toc_tree.append([1, ch_title, heading_pages[ch_title]])
                         for sub in ch["subsections"]:
-                            if sub in heading_pages:
-                                toc_tree.append([2, sub, heading_pages[sub]])
+                            sub_key = f"{ch_title}::{sub}"
+                            sub_p = heading_pages.get(sub_key) or heading_pages.get(ch_title)
+                            toc_tree.append([2, sub, sub_p])
 
                 doc_final.set_toc(toc_tree)
                 final_page_count = len(doc_final)

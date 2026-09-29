@@ -8,7 +8,7 @@ from .image_generator import (
     enhance_evidence_prompt,
 )
 from .guide_formatter import format_kdp_guide, format_kdp_docx
-from .docs_output import save_document
+from .docs_output import save_document, upload_to_google_docs
 
 __all__ = [
     "search_web",
@@ -21,4 +21,5 @@ __all__ = [
     "format_kdp_guide",
     "format_kdp_docx",
     "save_document",
+    "upload_to_google_docs",
 ]
