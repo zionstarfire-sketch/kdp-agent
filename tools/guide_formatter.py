@@ -1365,10 +1365,33 @@ Format: Amazon KDP Direct
 
         # Generate PDF version using headless Microsoft Edge
         pdf_filepath = os.path.join(output_dir, f"{clean_title}.pdf")
-        edge_exe = r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
+        def find_browser():
+            import shutil
+            env_b = os.getenv("BROWSER_PATH")
+            if env_b and os.path.exists(env_b):
+                return env_b
+            for name in ["chromium", "chromium-browser", "google-chrome", "google-chrome-stable", "msedge"]:
+                w = shutil.which(name)
+                if w:
+                    return w
+            for p in [
+                r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+                r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+                r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+                r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+                "/usr/bin/chromium",
+                "/usr/bin/chromium-browser",
+                "/usr/bin/google-chrome",
+                "/usr/bin/google-chrome-stable",
+            ]:
+                if os.path.exists(p):
+                    return p
+            return None
+
+        edge_exe = find_browser()
         pdf_status = ""
         
-        if os.path.exists(edge_exe):
+        if edge_exe:
             html_abs = os.path.abspath(html_filepath)
             pdf_abs = os.path.abspath(pdf_filepath)
             try:
@@ -1517,7 +1540,7 @@ Format: Amazon KDP Direct
             except Exception as e:
                 pdf_status = f"\n- PDF Generation Failed: {str(e)}"
         else:
-            pdf_status = "\n- PDF Generation Skipped: Microsoft Edge executable not found."
+            pdf_status = "\n- PDF Generation Skipped: Headless browser (Chromium/Chrome/Edge) executable not found."
 
         # Generate editable Word (.docx) manuscript
         docx_status = ""

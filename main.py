@@ -966,4 +966,9 @@ with gr.Blocks(title="KDP Travel Guide System") as demo:
 
 if __name__ == "__main__":
     output_dir = os.path.abspath("output")
-    demo.launch(allowed_paths=[output_dir])
+    port = int(os.environ.get("PORT", 7860))
+    demo.launch(
+        server_name="0.0.0.0",
+        server_port=port,
+        allowed_paths=[output_dir],
+    )
