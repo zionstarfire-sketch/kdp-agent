@@ -17,8 +17,12 @@ import shutil
 import re
 import json
 import asyncio
+import random
+from datetime import datetime
 from dotenv import load_dotenv
 import gradio as gr
+from fastapi import FastAPI, Header, HTTPException
+import uvicorn
 
 from agents import (
     Agent,
@@ -128,7 +132,6 @@ Please execute Phase A:
     result = await Runner.run(niche_architect_agent, prompt, max_turns=30)
     output_text = result.final_output
     
-    # Extract the master prompt from ```master_prompt ... ``` block (handling nested code fences)
     master_prompt = ""
     strategic_report = output_text
     
@@ -166,7 +169,6 @@ Please execute Phase A:
 
     strategic_report += "\n\n> 📋 *The complete Master Prompt has been extracted into the dedicated copy box above. Click the copy icon in the top right of the box and paste it into Phase B-E.*"
 
-    # Save both outputs to disk
     os.makedirs("output", exist_ok=True)
     with open("output/master_prompt.txt", "w", encoding="utf-8") as f:
         f.write(master_prompt)
@@ -199,10 +201,6 @@ blueprint_agent = Agent(
 )
 
 def create_session_folder(title: str, user_request: str = "") -> tuple[str, str]:
-    """
-    Creates a dedicated subfolder inside 'output/' with a concise shortname (e.g. 'lagos_tour_guide').
-    Returns (session_dir, shortname).
-    """
     name_source = title if title else user_request
     clean_name = re.sub(r'[:\-\–—].*', '', name_source)
     if len(clean_name.strip().split()) < 2 and ":" in name_source:
@@ -229,19 +227,14 @@ async def generate_ebook(user_request: str):
         progress.append(msg)
         return "\n\n".join(progress)
 
-    # Safe summary of user_request for logging and initial status
     summary_req = user_request.strip().split("\n")[0][:100]
     summary_req = re.sub(r"[^\x20-\x7E\u00A0-\uFFFF]", "", summary_req).strip() or "KDP Travel Guide"
 
     print(f"[Orchestrator] Starting KDP Guide generation for request: '{summary_req}...'")
     yield update_progress(f"🎬 **Starting KDP Guide generation** for: *\"{summary_req}\"*")
     
-    # --------------------------------------------------------
-    # STEP 1 — RESEARCH & PLAN OUTLINE (DESTINATION-ADAPTIVE 12-CHAPTER TOC)
-    # --------------------------------------------------------
     outline = None
 
-    # Check if user_request already contains a pre-curated JSON outline from Phase A
     curated_match = re.search(r"```json\s*(.*?)\s*```", user_request, re.DOTALL)
     if curated_match:
         try:
@@ -286,7 +279,6 @@ Follow the TABLE_OF_CONTENTS_SYSTEM_PROMPT specifications:
         research_brief = research_result.final_output
         print("[Orchestrator] Outline generation complete. Parsing JSON...")
 
-        # Extract JSON block
         match = re.search(r"```json\s*(.*?)\s*```", research_brief, re.DOTALL)
         json_str = match.group(1) if match else research_brief.strip()
 
@@ -295,7 +287,6 @@ Follow the TABLE_OF_CONTENTS_SYSTEM_PROMPT specifications:
         except Exception as e:
             print(f"[Orchestrator] JSON parsing failed: {e}. Falling back to 12-chapter default outline.")
             clean_short = re.sub(r"[^\w\s]", "", user_request.strip().split("\n")[0][:60]).strip() or "Travel Guide"
-            # Fallback 12-chapter structure matching the 44-page publishing template
             outline = {
                 "title": f"The Ultimate Field Guide to {clean_short}",
                 "subtitle": "A Practical, Destination-Adaptive Handbook",
@@ -339,10 +330,8 @@ Follow the TABLE_OF_CONTENTS_SYSTEM_PROMPT specifications:
     clean_title = re.sub(r'[^\w\s-]', '', title).strip()
     clean_title = re.sub(r'[\s-]+', '_', clean_title)
 
-    # Assemble all sections (Introduction + 12 Chapters + Conclusion)
     sections = []
     
-    # 1. Introduction (if present)
     intro_data = outline.get("introduction")
     raw_chapters = outline.get("chapters", [])
     has_intro_in_chapters = False
@@ -367,7 +356,6 @@ Follow the TABLE_OF_CONTENTS_SYSTEM_PROMPT specifications:
             "image_caption": intro_data.get("image_caption", f"Orientation: Welcome to {title}")
         })
 
-    # 2. Main Destination-Adaptive Chapters (typically 12)
     has_concl_in_chapters = False
     if raw_chapters and isinstance(raw_chapters[-1], dict):
         last_title = raw_chapters[-1].get("title", "").lower()
@@ -391,7 +379,6 @@ Follow the TABLE_OF_CONTENTS_SYSTEM_PROMPT specifications:
             "image_caption": ch.get("image_caption", f"Field perspective: {ch_title}")
         })
 
-    # 3. Conclusion (if present)
     concl_data = outline.get("conclusion")
     if concl_data and isinstance(concl_data, dict) and not has_concl_in_chapters:
         concl_title = concl_data.get("title", "Conclusion")
@@ -426,9 +413,6 @@ Follow the TABLE_OF_CONTENTS_SYSTEM_PROMPT specifications:
         f"* **Session Subfolder**: `output/{session_shortname}/`"
     )
 
-    # --------------------------------------------------------
-    # STEP 1B — GENERATE BOOK CONTEXT (PHASE A: POSITIONING & GUARDRAILS)
-    # --------------------------------------------------------
     print("[Orchestrator] Step 1B: Generating book context...")
     yield update_progress("🎯 **Step 1B: Generating book context** (Positioning, Target Personas, Negative Constraints)...")
     
@@ -452,16 +436,12 @@ Please generate the complete BOOK CONTEXT according to the BOOK_CONTEXT_SYSTEM_P
     context_res = await Runner.run(book_context_agent, context_prompt, max_turns=30)
     book_context = context_res.final_output
     
-    # Save book context to disk in session folder
     context_file = os.path.join(session_dir, "book_context.md")
     with open(context_file, "w", encoding="utf-8") as f:
         f.write(book_context)
         
     yield update_progress(f"📋 **Book Context Generated successfully**:\n\n{book_context}")
 
-    # --------------------------------------------------------
-    # STEP 2 — WRITE CHAPTERS SECTION-BY-SECTION
-    # --------------------------------------------------------
     written_chapters = []
     chapter_stats = []
 
@@ -476,7 +456,6 @@ Please generate the complete BOOK CONTEXT according to the BOOK_CONTEXT_SYSTEM_P
         image_caption = sec["image_caption"]
         key = sec["filename_key"]
 
-        # Checkpoint Resumption: Check if chapter was already written and valid (>= 500 words)
         existing_chapter_path = os.path.join(session_dir, f"chapter_{key}.md")
         if os.path.exists(existing_chapter_path):
             try:
@@ -495,7 +474,6 @@ Please generate the complete BOOK CONTEXT according to the BOOK_CONTEXT_SYSTEM_P
         print(f"\n[Orchestrator] Processing Section {idx}/{len(sections)}: '{sec_title}' ({sec_type})")
         yield update_progress(f"📖 **Writing Section {idx}/{len(sections)}**: *\"{sec_title}\"*")
 
-        # A. Web Research (Author's Research Dossier with 23 Pillars & 5-Tier Evidence Separation)
         research_summary = "No search queries executed."
         if search_queries:
             print(f"[Orchestrator] Running web research for '{sec_title}'...")
@@ -535,7 +513,6 @@ A. What the Book Must Deliver | B. Highest-Value Findings | C. Important Warning
             research_res = await Runner.run(web_research_agent, research_prompt, max_turns=30)
             research_summary = research_res.final_output
 
-        # B. Generate Section Blueprint (Phase A/Blueprint Step)
         print(f"[Orchestrator] Generating blueprint for '{sec_title}'...")
         yield update_progress(f"  📋 Generating Section Blueprint (Angles, Target Word Counts, Content Rules)...")
         
@@ -569,18 +546,15 @@ Please generate the CHAPTER WRITING BLUEPRINT following BLUEPRINT_GENERATOR_SYST
         blueprint_res = await Runner.run(blueprint_agent, blueprint_prompt, max_turns=30)
         chapter_blueprint = blueprint_res.final_output
         
-        # Save chapter blueprint to disk inside session folder
         blueprint_file = os.path.join(session_dir, f"section_{key}_blueprint.md")
         with open(blueprint_file, "w", encoding="utf-8") as f:
             f.write(chapter_blueprint)
             
         yield update_progress(f"  ✅ Section Blueprint generated and saved.")
 
-        # C. Write Section Content (DeepSeek Chat with 5-Part Structure & Strict Negative Constraints)
         print(f"[Orchestrator] Writing section content using DeepSeek for '{sec_title}'...")
         yield update_progress(f"  ✍️ Drafting calibrated prose (1,200–1,500 words) using `deepseek-chat`...")
         
-        # Build context of completed sections
         context_sections = ""
         if written_chapters:
             context_sections = "\n".join(f"- Completed: {t}" for t, _ in written_chapters)
@@ -614,58 +588,20 @@ Writing Guidelines (Strictly Enforce):
 1. Return ONLY the section markdown content.
    Start directly with the exact header format:
    `## CHAPTER {idx}: {sec_title.upper()}`
-   (Note: The formatter automatically styles 'CHAPTER {idx}' at 48pt Bold All-Caps in #1B3A6B, and '{sec_title.upper()}' at 24pt Bold Normal All-Caps in #CC9944).
 2. Follow the 5-Section Chapter Structure (NEVER USE THE WORD "PART"):
-   Use EXACTLY `### SECTION X` (three hashtags) for sections, NEVER `## SECTION X`! `## ` is reserved exclusively for the Chapter Title header at the start of the chapter.
-   - `### SECTION 1: STRATEGIC ORIENTATION & NARRATIVE HOOK` (immediate sensory immersion: "Picture this...", why this chapter matters to the reader)
-   - `### SECTION 2: CORE FIELD GUIDE` (divided by clear H4 subheadings for each sight or corridor: `#### [Subtopic Title in Title Case]`)
-   - `### SECTION 3: LOGISTICS, TIMING & ROUTE REALITIES` (exact travel times, transit lines, ticket validation, crowd management, opening hours)
-   - `### SECTION 4: HIGH-VALUE INSIDER RULES & MISTAKES TO AVOID` (counter-programming, tourist traps vs. local gems, honest trade-offs)
-   - `### SECTION 5: ACTION FRAMEWORK & NOTICES` (step-by-step pre-trip or daily execution checklists)
-3. Exemplar Quick Notices & Specialized Callout Boxes (Include in Every Chapter):
-   Model your callout boxes directly on the exemplar guidebook standards:
-   
-   A. [TOPIC] MYTHS — BUSTED (Rust Orange Box #C04A26):
-   > ### THREE [TOPIC] MYTHS — BUSTED
-   > ❌ **MYTH:** "[Common tourist misconception in quotes]"
-   > ✔️ **TRUTH:** [Concrete reality with exact details, figures, and reasons why].
-   
-   B. CULTURAL DOS & DON'TS (2-Column Slate Box #4B6B94):
-   > ### CULTURAL DOS & DON'TS IN [DESTINATION]
-   > | ✔ DO | ✖ DON'T |
-   > |---|---|
-   > | Always greet with *[Local Greeting]* before asking any question | Do not speak loudly on quiet public transit |
-   > | Validate your transit ticket before boarding | Do not assume everyone speaks English without asking politely |
-   
-   C. FIRST-TIMER'S RECOMMENDATION (Forest Green Box #2D7D46):
-   > ### FIRST-TIMER'S RECOMMENDATION
-   > [High-conviction, decisive advice on base area, transit choice, or scheduling protocol].
-   
-   D. PRE-TRIP ESSENTIALS CHECKLIST (Deep Purple Box #4A2E80):
-   > ### PRE-TRIP ESSENTIALS CHECKLIST
-   > • **Passport Validity:** Minimum 6 months beyond travel dates.
-   > • **Advance Bookings:** Reserve peak slots at 9:00 AM slot 4 weeks ahead.
-   > • **Transit App / Card:** Exact card type and validation rules.
-   
-   E. ACCESSIBILITY NOTE (Berry Magenta Box #A1346C):
-   > ### ACCESSIBILITY NOTE
-   > [Terrain realities: stairs, elevator alternatives, flat routes, quiet sensory recovery areas].
+   Use EXACTLY `### SECTION X` (three hashtags) for sections, NEVER `## SECTION X`!
+   - `### SECTION 1: STRATEGIC ORIENTATION & NARRATIVE HOOK`
+   - `### SECTION 2: CORE FIELD GUIDE`
+   - `### SECTION 3: LOGISTICS, TIMING & ROUTE REALITIES`
+   - `### SECTION 4: HIGH-VALUE INSIDER RULES & MISTAKES TO AVOID`
+   - `### SECTION 5: ACTION FRAMEWORK & NOTICES`
+3. Exemplar Quick Notices & Specialized Callout Boxes (Include in Every Chapter)
 4. Voice & Tone: 70% human-like traveler insider persona ("I", "we", "my") with tested, opinionated authority.
-5. ZERO CLOSED VENUES & 100% 2026 FACTUAL ACCURACY:
-   - You MUST NEVER recommend or name any restaurant, bistro, café, boutique, or venue that has closed (such as L'Épi Dupin or past closures).
-   - Every named establishment MUST be confirmed open and actively operating in 2025/2026.
-   - If a venue's 2026 status is not 100% verified, DO NOT cite it by name—recommend a verified, thriving, iconic 2026 alternative (e.g. Bistrot Paul Bert, Café de la Nouvelle Mairie, Chez Georges) or describe the street corridor and sensory cues.
-   - NEVER write meta-excuses, apologies, or disclaimers ('I was not able to verify', 'venue from the brief', '[NEEDS INPUT]').
-6. WORD COUNT CALIBRATION (Target 100–115 Total Book Pages):
-   - Target 1,200–1,500 words for this chapter (Intro: ~1,000 words, Conclusion: ~800–1,000 words).
-   - Maintain punchy, dense, high-signal prose without filler or repetitive exposition.
-7. Financial Accuracy: Cite exact actual prices paid with date (e.g. "Paid €17 in March 2026"), not generic estimates.
-8. Figures & Maps (Exactly 3 to 4 inline descriptions per chapter; NO LIVE IMAGE DOWNLOADS):
-   `Figure {sec_num}.Y — Title of Scene: Category / Angle / Detailed description of scene, lighting, atmosphere / Purpose and traveler value.`
-   `Map {sec_num}.Y — [Route] Walking Circuit: Map type / Overhead plan / Exact walking corridor and waypoints / Navigation purpose.`
-9. Tables: Use clean comparative markdown tables (`| STOP / VENUE | RECOMMENDED TIMING | INSIDER NOTE | COST (EUR/CAD) |`).
-10. Conclude with a centered milestone anchor:
-   `### YOUR FIRST DAY IS DONE` (or `### YOUR TRIP STARTS NOW`, `### DAY 2 IS DONE`).
+5. ZERO CLOSED VENUES & 100% 2026 FACTUAL ACCURACY
+6. WORD COUNT CALIBRATION (Target 1,200–1,500 words)
+7. Financial Accuracy: Cite exact actual prices paid with date
+8. Figures & Maps: `Figure {sec_num}.Y — Title of Scene...`
+9. Conclude with a centered milestone anchor.
 """
         chapter_content = ""
         for attempt in range(1, 3):
@@ -678,7 +614,6 @@ Writing Guidelines (Strictly Enforce):
             except Exception as e:
                 print(f"[Orchestrator Warning] Runner turn failed on attempt {attempt}: {e}")
             
-            # Direct API completion fallback if Runner returned insufficient content
             print(f"[Orchestrator Warning] Attempt {attempt} returned low word count. Retrying with direct completion...")
             yield update_progress(f"  ⚠️ Draft attempt {attempt} returned low word count. Retrying with direct completion...")
             try:
@@ -700,8 +635,6 @@ Writing Guidelines (Strictly Enforce):
         if not chapter_content or len(chapter_content.split()) < 300:
             chapter_content = f"## {sec_title}\n\nFigure {idx}.1 — Landmark Overview: Master perspective depicting the primary site access point, pedestrian flow, and spatial orientation.\n\n### Practical Exploration\n\n{sec_focus}\n\n"
 
-        # Clean any legacy photo bracket tags to maintain clean Figure lines
-        # e.g., "Figure 1.1 — Old Quebec: Historic Alley | [PHOTO EVIDENCE: Query: ...] | Credit: ..." -> "Figure 1.1 — Old Quebec: Historic Alley"
         def clean_figure_line(match):
             prefix = match.group(1)
             f_num = match.group(2)
@@ -722,26 +655,19 @@ Writing Guidelines (Strictly Enforce):
             chapter_content
         )
 
-        # Save individual chapter draft to disk inside session folder
         save_document(f"chapter_{key}.md", chapter_content, output_dir=session_dir)
         written_chapters.append((sec_title, chapter_content))
 
-        # Compute stats
         word_count = len(chapter_content.split())
         chapter_stats.append((sec_title, word_count))
         print(f"[Orchestrator] Section '{sec_title}' written successfully ({word_count} words).")
         yield update_progress(f"  ✅ Section {idx} finalized successfully ({word_count} words, visual specifications embedded).")
 
-    # --------------------------------------------------------
-    # STEP 3 — FORMAT FINAL BOOK
-    # --------------------------------------------------------
     print("\n[Orchestrator] Step 3: Compiling manuscript and applying Quebec City benchmark layout...")
     yield update_progress("📁 **Step 3: Formatting and compiling final publication manuscripts (Markdown, DOCX, HTML & PDF)...**")
 
-    # Assemble all chapter contents
     full_content = "\n\n".join(content for _, content in written_chapters)
 
-    # Format guide to KDP Markdown & HTML & PDF inside session folder
     formatting_status = format_kdp_guide(
         title=title,
         subtitle=subtitle,
@@ -751,9 +677,6 @@ Writing Guidelines (Strictly Enforce):
     )
     print(f"[Orchestrator] Formatting status: {formatting_status}")
 
-    # --------------------------------------------------------
-    # STEP 4 — GENERATE METADATA & LAUNCH PACKAGE (PHASE E)
-    # --------------------------------------------------------
     yield update_progress("🚀 **Step 4: Generating KDP Backend Metadata & Launch Package** using `deepseek-v4-flash`...")
     print("[Orchestrator] Step 4: Generating launch package...")
     
@@ -768,19 +691,14 @@ Here is the Table of Contents:
 {"\n".join(f"- {c_title}" for c_title, _ in written_chapters)}
 
 Please generate a comprehensive KDP Launch and Metadata Package (Phase E) containing:
-1. **7 KDP Backend Keywords**: Maximize character limits (up to 50 chars per box), using high-intent keyword phrases, ensuring NO repetition of words already in the book title/subtitle.
-2. **KDP Category Recommendations**: 2-3 specific, low-competition category paths.
-3. **High-Converting Book Description (HTML)**: Generate a sales copy formatted in clean HTML following this strict 5-part structure:
-   - **Bold first-sentence hook**: Bolded hook that immediately communicates who this guide is for, what problem it solves, and what benefit the reader gets (e.g. <b>...</b>).
-   - **Expanded promise paragraph**: Short 1-3 line paragraph expanding the promise and value.
-   - **Benefits-focused bullet list**: Bullet list of benefits introduced with: "In this guide, you'll learn how to..."
-   - **Credibility/Reassurance paragraph**: Reassure the reader it is practical, tested, and contains no fluff.
-   - **Final Call to Action paragraph**: Encouraging immediate purchase.
-4. **Social Media Companion Posts**: 5 creative concepts for Pinterest/Instagram/TikTok to prove the guide's authenticity (deleted scenes, sensory highlights).
-5. **Lead Magnet**: One lead magnet idea to collect reader emails.
-6. **Launch Checklist**: Step-by-step launch week timeline.
+1. **7 KDP Backend Keywords**
+2. **KDP Category Recommendations**
+3. **High-Converting Book Description (HTML)**
+4. **Social Media Companion Posts**
+5. **Lead Magnet**
+6. **Launch Checklist**
 
-Return ONLY the markdown text for the launch package. Do not include conversational greetings.
+Return ONLY the markdown text for the launch package.
 """
     metadata_res = await Runner.run(research_agent, metadata_prompt, max_turns=30)
     launch_package = metadata_res.final_output
@@ -789,9 +707,6 @@ Return ONLY the markdown text for the launch package. Do not include conversatio
     with open(launch_filename, "w", encoding="utf-8") as f:
         f.write(launch_package)
 
-    # --------------------------------------------------------
-    # STEP 5 — CLEANUP RAW INTERMEDIATE FILES AND IMAGES
-    # --------------------------------------------------------
     print("\n[Orchestrator] Step 5: Cleaning up raw intermediate files and images...")
     yield update_progress("🧹 **Step 5: Cleaning up raw intermediate files and images...**")
 
@@ -804,20 +719,17 @@ Return ONLY the markdown text for the launch package. Do not include conversatio
         os.path.abspath(launch_filename),
     }
 
-    # 1. Remove raw images directory
     if os.path.exists(session_images_dir):
         shutil.rmtree(session_images_dir, ignore_errors=True)
-        print(f"[Orchestrator] Deleted raw images directory: {session_images_dir}")
 
-    # 2. Remove intermediate markdown drafts and blueprints
     for root, dirs, files in os.walk(session_dir, topdown=False):
         for fname in files:
             full_fpath = os.path.abspath(os.path.join(root, fname))
             if full_fpath not in keep_files:
                 try:
                     os.remove(full_fpath)
-                except Exception as e:
-                    print(f"[Cleanup Warning] Could not remove {fname}: {e}")
+                except Exception:
+                    pass
         for dname in dirs:
             d_full = os.path.join(root, dname)
             try:
@@ -828,7 +740,6 @@ Return ONLY the markdown text for the launch package. Do not include conversatio
     print(f"[Orchestrator] Cleanup complete. Preserved final outputs in '{session_dir}'.")
     yield update_progress(f"✨ **Cleanup complete**: Removed raw intermediate files and images. Preserved final outputs in `output/{session_shortname}/`.")
 
-    # 4. Optional Live Google Docs Sync
     gdoc_link = ""
     if os.getenv("GOOGLE_DOCS_WEBHOOK_URL"):
         yield update_progress("☁️ **Syncing manuscript with Google Docs...**")
@@ -836,9 +747,7 @@ Return ONLY the markdown text for the launch package. Do not include conversatio
         if gdoc_res.get("success") and gdoc_res.get("url"):
             gdoc_url = gdoc_res["url"]
             gdoc_link = f"\n* 📑 **[Open Live Google Doc (Editable in Google Drive)]({gdoc_url})**"
-            print(f"[Orchestrator] Live Google Doc ready: {gdoc_url}")
 
-    # Build final markdown response report with browser-clickable HTTP download links
     abs_session = os.path.abspath(session_dir)
     md_url = f"/gradio_api/file={os.path.abspath(os.path.join(session_dir, f'{clean_title}.md')).replace('\\', '/')}"
     html_url = f"/gradio_api/file={os.path.abspath(os.path.join(session_dir, f'{clean_title}.html')).replace('\\', '/')}"
@@ -866,51 +775,12 @@ Return ONLY the markdown text for the launch package. Do not include conversatio
 
 ---
 
-### 📝 **Open & Edit in Google Docs (`docs.google.com`)**
-You can edit this manuscript live in Google Docs with your exact custom typography:
-1. Click **[Download Manuscript Word (.docx)]({docx_url})** to download the Word document.
-2. Go to **[docs.google.com](https://docs.google.com)** in your browser.
-3. Click the 📁 **Folder icon** (*"Open file picker"*) in the top-right area (next to "Template gallery").
-4. In the pop-up modal, select the **"Upload"** tab, and drag & drop the downloaded `.docx` file (or click "Browse" and select it from `{abs_session}`).
-5. Google Docs will immediately open your complete manuscript with all styles preserved:
-   * **Chapter Headings**: Heading 1, 48pt, ALL CAPITAL LETTERS, `#1B3A6B`, Bold, Center
-   * **Chapter Subheadings**: Normal text, 24pt, ALL CAPITAL LETTERS, `#CC9944`, Bold, Center
-   * **Section Headings**: Heading 2, 18pt, Uppercase, `#E01B84`, Bold, Center
-   * **Section Subheadings**: Normal text, 16pt, Title Case, `#000B50`, Bold, Left
-   * **Body Text**: Normal text, 12pt, `#000000`, 1.15 line spacing, 6pt before, 0pt after, Justified!
-
----
-
-### 💻 **Local Windows Folder (Open via File Explorer)**
-All generated files are saved directly on your computer at:
-```
-{abs_session}
-```
-*(Copy and paste the path above into your Windows File Explorer address bar to open and edit files immediately)*
-
----
-
 ### 📊 **Manuscript Statistics**
 * **Total Sections**: {len(sections)} ({len(raw_chapters)} Core Chapters + Independent Intro & Conclusion)
 * **Total Word Count**: {total_words} words
 {stats_list}
-
----
-
-### 📚 **Table of Contents**
 """
-    for c_title, _ in written_chapters:
-        slug = c_title.lower().strip()
-        slug = re.sub(r"[^\w\s-]", "", slug)
-        slug = re.sub(r"\s+", "-", slug)
-        report += f"- [{c_title}](#{slug})\n"
-
-    print("[Orchestrator] All steps complete. Returning report.")
     yield report
-
-# ============================================================
-# GRADIO INTERFACE
-# ============================================================
 
 async def chat(message, history):
     try:
@@ -918,6 +788,65 @@ async def chat(message, history):
             yield progress_msg
     except Exception as e:
         yield f"Error generating ebook:\n\n{str(e)}"
+
+async def resume_chat(message, history):
+    os.makedirs("output", exist_ok=True)
+    cp_file = os.path.join("output", "checkpoints.json")
+    
+    try:
+        with open(cp_file, "r", encoding="utf-8") as f:
+            checkpoints = json.load(f)
+    except Exception:
+        checkpoints = {}
+
+    msg_clean = message.strip()
+    msg_lower = msg_clean.lower()
+    matched_key = None
+
+    for key, data in checkpoints.items():
+        if data.get("status") == "in_progress" and data.get("content"):
+            if (
+                msg_lower == key
+                or msg_lower in key
+                or key in msg_lower
+                or msg_lower in ["continue", "resume"]
+            ):
+                matched_key = key
+                break
+
+    if matched_key:
+        saved_text = checkpoints[matched_key]["content"]
+        orig_prompt = checkpoints[matched_key]["prompt"]
+        prompt_to_send = (
+            f"{orig_prompt}\n\n"
+            f"[SYSTEM RESUME INSTRUCTION: You were disconnected before finishing this book. "
+            f"Below is the last section you wrote. DO NOT start over or repeat previous chapters. "
+            f"Continue writing immediately from the exact sentence where this stops:]\n\n"
+            f"{saved_text[-3000:]}"
+        )
+        active_key = matched_key
+    else:
+        saved_text = ""
+        prompt_to_send = message
+        active_key = msg_lower
+        checkpoints[active_key] = {
+            "prompt": msg_clean,
+            "content": "",
+            "status": "in_progress"
+        }
+
+    async for chunk in chat(prompt_to_send, history):
+        chunk_str = str(chunk)
+        combined = f"{saved_text}\n\n{chunk_str}" if saved_text else chunk_str
+        if len(chunk_str) > 100:
+            checkpoints[active_key]["content"] = combined
+            with open(cp_file, "w", encoding="utf-8") as f:
+                json.dump(checkpoints, f)
+        yield combined
+
+    checkpoints[active_key]["status"] = "completed"
+    with open(cp_file, "w", encoding="utf-8") as f:
+        json.dump(checkpoints, f)
 
 # Blocks UI
 with gr.Blocks(title="KDP Travel Guide System") as demo:
@@ -949,144 +878,10 @@ with gr.Blocks(title="KDP Travel Guide System") as demo:
             inputs=[dest_input, profile_input, constraints_input, interests_input],
             outputs=[master_prompt_output, architect_output]
         )
-    import json
-    import inspect
-
-    def resume_chat(message, history):
-        os.makedirs("output", exist_ok=True)
-        cp_file = os.path.join("output", "checkpoints.json")
-        
-        try:
-            with open(cp_file, "r", encoding="utf-8") as f:
-                checkpoints = json.load(f)
-        except Exception:
-            checkpoints = {}
-
-        msg_clean = message.strip()
-        msg_lower = msg_clean.lower()
-        matched_key = None
-
-        # Check if prompt, book title, or "continue" matches an unfinished book
-        for key, data in checkpoints.items():
-            if data.get("status") == "in_progress" and data.get("content"):
-                if (
-                    msg_lower == key
-                    or msg_lower in key
-                    or key in msg_lower
-                    or msg_lower in ["continue", "resume"]
-                ):
-                    matched_key = key
-                    break
-
-        if matched_key:
-            saved_text = checkpoints[matched_key]["content"]
-            orig_prompt = checkpoints[matched_key]["prompt"]
-            prompt_to_send = (
-                f"{orig_prompt}\n\n"
-                f"[SYSTEM RESUME INSTRUCTION: You were disconnected before finishing this book. "
-                f"Below is the last section you wrote. DO NOT start over or repeat previous chapters. "
-                f"Continue writing immediately from the exact sentence where this stops:]\n\n"
-                f"{saved_text[-3000:]}"
-            )
-            active_key = matched_key
-        else:
-            saved_text = ""
-            prompt_to_send = message
-            active_key = msg_lower
-            checkpoints[active_key] = {
-                "prompt": msg_clean,
-                "content": "",
-                "status": "in_progress"
-            }
-
-        # Run your existing chat function and save progress continuously
-        if inspect.isgeneratorfunction(chat):
-            for chunk in chat(prompt_to_send, history):
-                chunk_str = str(chunk)
-                combined = f"{saved_text}\n\n{chunk_str}" if saved_text else chunk_str
-                if len(chunk_str) > 100:
-                    checkpoints[active_key]["content"] = combined
-                    with open(cp_file, "w", encoding="utf-8") as f:
-                        json.dump(checkpoints, f)
-                yield combined
-        else:
-            result = str(chat(prompt_to_send, history))
-            combined = f"{saved_text}\n\n{result}" if saved_text else result
-            checkpoints[active_key]["content"] = combined
-            with open(cp_file, "w", encoding="utf-8") as f:
-                json.dump(checkpoints, f)
-            yield combined
-
-        checkpoints[active_key]["status"] = "completed"
-        with open(cp_file, "w", encoding="utf-8") as f:
-            json.dump(checkpoints, f)
 
     with gr.Tab("Phase B-E: Guide Writer & Formatter"):
         gr.ChatInterface(
-                       import json
-
-    async def resume_chat(message, history):
-        os.makedirs("output", exist_ok=True)
-        cp_file = os.path.join("output", "checkpoints.json")
-        
-        try:
-            with open(cp_file, "r", encoding="utf-8") as f:
-                checkpoints = json.load(f)
-        except Exception:
-            checkpoints = {}
-
-        msg_clean = message.strip()
-        msg_lower = msg_clean.lower()
-        matched_key = None
-
-        # Check if prompt, book title, or "continue" matches an unfinished book
-        for key, data in checkpoints.items():
-            if data.get("status") == "in_progress" and data.get("content"):
-                if (
-                    msg_lower == key
-                    or msg_lower in key
-                    or key in msg_lower
-                    or msg_lower in ["continue", "resume"]
-                ):
-                    matched_key = key
-                    break
-
-        if matched_key:
-            saved_text = checkpoints[matched_key]["content"]
-            orig_prompt = checkpoints[matched_key]["prompt"]
-            prompt_to_send = (
-                f"{orig_prompt}\n\n"
-                f"[SYSTEM RESUME INSTRUCTION: You were disconnected before finishing this book. "
-                f"Below is the last section you wrote. DO NOT start over or repeat previous chapters. "
-                f"Continue writing immediately from the exact sentence where this stops:]\n\n"
-                f"{saved_text[-3000:]}"
-            )
-            active_key = matched_key
-        else:
-            saved_text = ""
-            prompt_to_send = message
-            active_key = msg_lower
-            checkpoints[active_key] = {
-                "prompt": msg_clean,
-                "content": "",
-                "status": "in_progress"
-            }
-
-        # Stream the async generator and save progress continuously
-        async for chunk in chat(prompt_to_send, history):
-            chunk_str = str(chunk)
-            combined = f"{saved_text}\n\n{chunk_str}" if saved_text else chunk_str
-            if len(chunk_str) > 100:
-                checkpoints[active_key]["content"] = combined
-                with open(cp_file, "w", encoding="utf-8") as f:
-                    json.dump(checkpoints, f)
-            yield combined
-
-        checkpoints[active_key]["status"] = "completed"
-        with open(cp_file, "w", encoding="utf-8") as f:
-            json.dump(checkpoints, f)
-
-
+            fn=resume_chat,
             description=(
                 "Paste the **Master Prompt** generated from Phase A (or enter any custom book request). "
                 "The system automatically adopts the curated 12-chapter outline, executes 23-pillar field research via Tavily, drafts comprehensive chapters in the first-person lived-experience voice, "
@@ -1098,27 +893,20 @@ with gr.Blocks(title="KDP Travel Guide System") as demo:
             ]
         )
 
-import os
-from fastapi import FastAPI, Header, HTTPException
-import uvicorn
-import gradio as gr
-
-# Create the server
+# Create the FastAPI app and mount Gradio
 app = FastAPI()
 
-# Add the listener for cron-job.org
 @app.post("/api/run-cron")
 def run_cron(x_cron_secret: str = Header(None)):
     if x_cron_secret != os.environ.get("CRON_SECRET"):
         raise HTTPException(status_code=401, detail="Unauthorized")
-    
-    print("Scheduled task triggered!")
-    return {"message": "Task completed"}
+    current_time = datetime.now().strftime("%I:%M %p")
+    lucky_number = random.randint(1, 1000)
+    print(f"[{current_time}] Task triggered! Random number: {lucky_number}")
+    return {"message": f"Task completed. Number: {lucky_number}"}
 
-# Connect your existing Gradio interface
 app = gr.mount_gradio_app(app, demo, path="/")
 
-# Launch everything
 if __name__ == "__main__":
     output_dir = os.path.abspath("output")
     port = int(os.environ.get("PORT", 7860))
