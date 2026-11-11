@@ -949,10 +949,82 @@ with gr.Blocks(title="KDP Travel Guide System") as demo:
             inputs=[dest_input, profile_input, constraints_input, interests_input],
             outputs=[master_prompt_output, architect_output]
         )
+    import json
+    import inspect
+
+    def resume_chat(message, history):
+        os.makedirs("output", exist_ok=True)
+        cp_file = os.path.join("output", "checkpoints.json")
+        
+        try:
+            with open(cp_file, "r", encoding="utf-8") as f:
+                checkpoints = json.load(f)
+        except Exception:
+            checkpoints = {}
+
+        msg_clean = message.strip()
+        msg_lower = msg_clean.lower()
+        matched_key = None
+
+        # Check if prompt, book title, or "continue" matches an unfinished book
+        for key, data in checkpoints.items():
+            if data.get("status") == "in_progress" and data.get("content"):
+                if (
+                    msg_lower == key
+                    or msg_lower in key
+                    or key in msg_lower
+                    or msg_lower in ["continue", "resume"]
+                ):
+                    matched_key = key
+                    break
+
+        if matched_key:
+            saved_text = checkpoints[matched_key]["content"]
+            orig_prompt = checkpoints[matched_key]["prompt"]
+            prompt_to_send = (
+                f"{orig_prompt}\n\n"
+                f"[SYSTEM RESUME INSTRUCTION: You were disconnected before finishing this book. "
+                f"Below is the last section you wrote. DO NOT start over or repeat previous chapters. "
+                f"Continue writing immediately from the exact sentence where this stops:]\n\n"
+                f"{saved_text[-3000:]}"
+            )
+            active_key = matched_key
+        else:
+            saved_text = ""
+            prompt_to_send = message
+            active_key = msg_lower
+            checkpoints[active_key] = {
+                "prompt": msg_clean,
+                "content": "",
+                "status": "in_progress"
+            }
+
+        # Run your existing chat function and save progress continuously
+        if inspect.isgeneratorfunction(chat):
+            for chunk in chat(prompt_to_send, history):
+                chunk_str = str(chunk)
+                combined = f"{saved_text}\n\n{chunk_str}" if saved_text else chunk_str
+                if len(chunk_str) > 100:
+                    checkpoints[active_key]["content"] = combined
+                    with open(cp_file, "w", encoding="utf-8") as f:
+                        json.dump(checkpoints, f)
+                yield combined
+        else:
+            result = str(chat(prompt_to_send, history))
+            combined = f"{saved_text}\n\n{result}" if saved_text else result
+            checkpoints[active_key]["content"] = combined
+            with open(cp_file, "w", encoding="utf-8") as f:
+                json.dump(checkpoints, f)
+            yield combined
+
+        checkpoints[active_key]["status"] = "completed"
+        with open(cp_file, "w", encoding="utf-8") as f:
+            json.dump(checkpoints, f)
 
     with gr.Tab("Phase B-E: Guide Writer & Formatter"):
         gr.ChatInterface(
-            fn=chat,
+                        fn=resume_chat,
+
             description=(
                 "Paste the **Master Prompt** generated from Phase A (or enter any custom book request). "
                 "The system automatically adopts the curated 12-chapter outline, executes 23-pillar field research via Tavily, drafts comprehensive chapters in the first-person lived-experience voice, "
