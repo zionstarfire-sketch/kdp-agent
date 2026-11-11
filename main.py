@@ -849,7 +849,7 @@ async def resume_chat(message, history):
         json.dump(checkpoints, f)
 
 # Blocks UI
-with gr.Blocks(title="KDP Travel Guide System", allowed_paths=["output"]) as demo:
+with gr.Blocks(title="KDP Travel Guide System") as demo:
     gr.Markdown("# 📖 KDP Travel Guide System")
     gr.Markdown("Brainstorm niches, research first-hand experiences, write opinionated chapters, and format print-ready publications.")
     
@@ -894,6 +894,7 @@ with gr.Blocks(title="KDP Travel Guide System", allowed_paths=["output"]) as dem
         )
 
 # Create the FastAPI app and mount Gradio
+os.environ["GRADIO_ALLOWED_PATHS"] = "output"
 app = FastAPI()
 
 @app.post("/api/run-cron")
@@ -908,6 +909,5 @@ def run_cron(x_cron_secret: str = Header(None)):
 app = gr.mount_gradio_app(app, demo, path="/")
 
 if __name__ == "__main__":
-    output_dir = os.path.abspath("output")
     port = int(os.environ.get("PORT", 7860))
     uvicorn.run(app, host="0.0.0.0", port=port)
