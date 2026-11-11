@@ -964,11 +964,28 @@ with gr.Blocks(title="KDP Travel Guide System") as demo:
             ]
         )
 
+import os
+from fastapi import FastAPI, Header, HTTPException
+import uvicorn
+import gradio as gr
+
+# Create the server
+app = FastAPI()
+
+# Add the listener for cron-job.org
+@app.post("/api/run-cron")
+def run_cron(x_cron_secret: str = Header(None)):
+    if x_cron_secret != os.environ.get("CRON_SECRET"):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    
+    print("Scheduled task triggered!")
+    return {"message": "Task completed"}
+
+# Connect your existing Gradio interface
+app = gr.mount_gradio_app(app, demo, path="/")
+
+# Launch everything
 if __name__ == "__main__":
     output_dir = os.path.abspath("output")
     port = int(os.environ.get("PORT", 7860))
-    demo.launch(
-        server_name="0.0.0.0",
-        server_port=port,
-        allowed_paths=[output_dir],
-    )
+    uvicorn.run(app, host="0.0.0.0", port=port)
