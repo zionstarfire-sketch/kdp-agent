@@ -849,7 +849,7 @@ async def resume_chat(message, history):
         json.dump(checkpoints, f)
 
 # Blocks UI
-with gr.Blocks(title="KDP Travel Guide System") as demo:
+with gr.Blocks(title="KDP Travel Guide System", allowed_paths=["output"]) as demo:
     gr.Markdown("# 📖 KDP Travel Guide System")
     gr.Markdown("Brainstorm niches, research first-hand experiences, write opinionated chapters, and format print-ready publications.")
     
